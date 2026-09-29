@@ -2,6 +2,7 @@ using AIUsage.Data;
 using AIUsage.Data.Repositories;
 using AIUsage.Jira;
 using AIUsage.Settings;
+using AIUsage.Tickets;
 
 namespace AIUsage.Bridge.Handlers;
 
@@ -24,7 +25,7 @@ public static class JiraHandlers
                 ?? throw new ArgumentException("ticketKey is required");
             var client = JiraClient.FromSettings()
                 ?? throw new InvalidOperationException("JIRA is not configured — set site URL, email and token in Settings");
-            var found = await JiraSync.FetchOneAsync(client, key);
+            var found = await TicketSync.FetchOneAsync(new JiraTicketProvider(client), key);
             return new { found };
         });
 
@@ -37,12 +38,13 @@ public static class JiraHandlers
             using (var conn = Db.Open())
                 keys = TicketRepo.AllKeys(conn);
 
+            var provider = new JiraTicketProvider(client);
             int ok = 0, dead = 0, failed = 0;
             foreach (var key in keys)
             {
                 try
                 {
-                    if (await JiraSync.FetchOneAsync(client, key)) ok++;
+                    if (await TicketSync.FetchOneAsync(provider, key)) ok++;
                     else dead++;
                 }
                 catch
@@ -69,8 +71,8 @@ public static class JiraHandlers
 
             using (var conn = Db.Open())
                 foreach (var iss in page.Issues)
-                    TicketRepo.UpsertFetched(conn, iss.Key, iss.Summary, iss.Status, iss.IssueType,
-                        iss.Project, iss.Sprint, iss.Priority, iss.Updated);
+                    TicketRepo.Upsert(conn, new TicketInfo(iss.Key, TicketProviderIds.Jira, iss.Summary, iss.Status,
+                        iss.IssueType, iss.Project, iss.Sprint, iss.Priority, iss.Updated));
 
             return new { imported = page.Issues.Count, nextPageToken = page.NextPageToken, isLast = page.IsLast };
         });

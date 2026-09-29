@@ -5,13 +5,6 @@ namespace AIUsage.Data.Repositories;
 
 public static class TicketRepo
 {
-    /// <summary>Transitional wrapper over <see cref="Upsert"/> for JIRA-only callers; Task 4 removes it.</summary>
-    public static void UpsertFetched(SqliteConnection conn, string key, string? summary, string? status,
-        string? issueType, string? project, string? sprint, string? priority, string? updated,
-        string? description = null) =>
-        Upsert(conn, new TicketInfo(key, TicketProviderIds.Jira, summary, status, issueType,
-            project, sprint, priority, updated, description));
-
     public static void Upsert(SqliteConnection conn, TicketInfo t)
     {
         using var cmd = conn.CreateCommand();

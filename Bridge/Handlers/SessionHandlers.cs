@@ -2,6 +2,7 @@ using System.Text.Json;
 using AIUsage.Data;
 using AIUsage.Data.Repositories;
 using AIUsage.Scanner;
+using AIUsage.Tickets;
 
 namespace AIUsage.Bridge.Handlers;
 
@@ -140,7 +141,7 @@ public static partial class SessionHandlers
             var (sessionId, ticketKey) = RequireSessionAndKey(payload);
             using (var conn = Db.Open())
                 SessionRepo.AssignTicket(conn, sessionId, ticketKey);
-            Jira.JiraSync.TryFetchInBackground(ticketKey);
+            TicketSync.TryFetchInBackground(ticketKey);
             return Task.FromResult<object?>(null);
         });
 

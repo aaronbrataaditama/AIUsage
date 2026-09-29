@@ -1,13 +1,14 @@
 using AIUsage.Data;
 using AIUsage.Data.Repositories;
 
-namespace AIUsage.Jira;
+namespace AIUsage.Tickets;
 
-public static class JiraSync
+/// <summary>Provider-neutral replacement for the old JIRA-only `Jira.JiraSync`.</summary>
+public static class TicketSync
 {
     /// <summary>
-    /// Fire-and-forget enrichment of a newly referenced ticket. Quietly does nothing
-    /// when JIRA isn't configured or the network is down — enrichment is optional.
+    /// Fire-and-forget enrichment of a newly referenced ticket. Quietly does nothing when no
+    /// tracker owns the key, or it isn't configured, or the network is down — enrichment is optional.
     /// </summary>
     public static void TryFetchInBackground(string ticketKey)
     {
@@ -15,15 +16,15 @@ public static class JiraSync
         {
             try
             {
-                var client = JiraClient.FromSettings();
-                if (client is null) return;
+                var provider = TicketProviders.For(ticketKey);
+                if (provider is null) return;
 
                 using (var conn = Db.Open())
                 {
                     if (!TicketRepo.UnsyncedKeys(conn).Contains(ticketKey)) return;
                 }
 
-                await FetchOneAsync(client, ticketKey);
+                await FetchOneAsync(provider, ticketKey);
             }
             catch
             {
@@ -33,17 +34,16 @@ public static class JiraSync
     }
 
     /// <summary>Fetch a single key and record the result. Returns true when the key exists.</summary>
-    public static async Task<bool> FetchOneAsync(JiraClient client, string ticketKey)
+    public static async Task<bool> FetchOneAsync(ITicketProvider provider, string ticketKey)
     {
-        var issue = await client.FetchIssueAsync(ticketKey);
+        var info = await provider.FetchAsync(ticketKey);
         using var conn = Db.Open();
-        if (issue is null)
+        if (info is null)
         {
             TicketRepo.MarkFailed(conn, ticketKey);
             return false;
         }
-        TicketRepo.UpsertFetched(conn, issue.Key, issue.Summary, issue.Status, issue.IssueType,
-            issue.Project, issue.Sprint, issue.Priority, issue.Updated, issue.Description);
+        TicketRepo.Upsert(conn, info);
         return true;
     }
 }

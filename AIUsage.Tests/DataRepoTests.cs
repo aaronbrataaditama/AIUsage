@@ -28,8 +28,8 @@ public class DataRepoTests
     {
         using var db = new TestDb();
 
-        TicketRepo.UpsertFetched(db.Conn, "ABC-1", "Fix the thing", "In Progress",
-            "Bug", "ABC", "Sprint 3", "High", "2026-07-01T00:00:00Z");
+        TicketRepo.Upsert(db.Conn, new TicketInfo("ABC-1", TicketProviderIds.Jira, "Fix the thing", "In Progress",
+            "Bug", "ABC", "Sprint 3", "High", "2026-07-01T00:00:00Z"));
 
         Assert.Contains("ABC-1", TicketRepo.AllKeys(db.Conn));
         var rows = TicketRepo.List(db.Conn);
@@ -41,8 +41,8 @@ public class DataRepoTests
     {
         using var db = new TestDb();
 
-        TicketRepo.UpsertFetched(db.Conn, "ABC-1", "First", "Open", "Task", "ABC", null, "Low", null);
-        TicketRepo.UpsertFetched(db.Conn, "ABC-1", "Second", "Done", "Task", "ABC", null, "Low", null);
+        TicketRepo.Upsert(db.Conn, new TicketInfo("ABC-1", TicketProviderIds.Jira, "First", "Open", "Task", "ABC", null, "Low", null));
+        TicketRepo.Upsert(db.Conn, new TicketInfo("ABC-1", TicketProviderIds.Jira, "Second", "Done", "Task", "ABC", null, "Low", null));
 
         Assert.Equal("Second", db.Scalar<string>("SELECT summary FROM Tickets WHERE key='ABC-1'"));
         Assert.Equal(1L, db.Scalar<long>("SELECT COUNT(*) FROM Tickets WHERE key='ABC-1'"));

@@ -7,6 +7,7 @@ using AIUsage.Platform;
 using AIUsage.Scanner;
 using AIUsage.Settings;
 using AIUsage.Terminal;
+using AIUsage.Tickets;
 using Photino.NET;
 
 namespace AIUsage.Bridge.Handlers;
@@ -21,13 +22,6 @@ namespace AIUsage.Bridge.Handlers;
 /// </summary>
 public static class LiveCodeHandlers
 {
-    /// <summary>Latest tickets assigned to the current user (independent of the user's Fetch JQL).</summary>
-    private const string AssignedJql = "assignee = currentUser() ORDER BY updated DESC";
-
-    /// <summary>Finished statuses hidden from the "tickets to work on" picker (case-insensitive).</summary>
-    private static readonly HashSet<string> ExcludedTicketStatuses =
-        new(StringComparer.OrdinalIgnoreCase) { "Closed", "Done", "Ready for Release" };
-
     /// <summary>How many assigned tickets the Live Code picker lists (setting
     /// <c>livecode_ticket_count</c>; default 3, clamped 1..20).</summary>
     private static int TicketCount() =>
@@ -120,10 +114,10 @@ public static class LiveCodeHandlers
             // configured count. Filtering client-side (vs JQL) avoids errors if a status name doesn't
             // exist in this instance; the page is oversized so filtering still leaves enough to take.
             var count = TicketCount();
-            var page = await client.SearchIssuesAsync(AssignedJql, nextPageToken: null,
+            var page = await client.SearchIssuesAsync(JiraTicketProvider.AssignedJql, nextPageToken: null,
                 maxResults: Math.Clamp(count * 3, 25, 60));
             var tickets = page.Issues
-                .Where(i => i.Status is null || !ExcludedTicketStatuses.Contains(i.Status.Trim()))
+                .Where(i => i.Status is null || !JiraTicketProvider.DoneStatuses.Contains(i.Status.Trim()))
                 .Take(count)
                 .Select(i => new
                 {
@@ -574,8 +568,9 @@ public static class LiveCodeHandlers
                         ticketSummary ??= iss.Summary;
                         description = iss.Description;
                         using var c = Db.Open();
-                        TicketRepo.UpsertFetched(c, iss.Key, iss.Summary, iss.Status, iss.IssueType,
-                            iss.Project, iss.Sprint, iss.Priority, iss.Updated, iss.Description);
+                        TicketRepo.Upsert(c, new TicketInfo(iss.Key, TicketProviderIds.Jira, iss.Summary, iss.Status,
+                            iss.IssueType, iss.Project, iss.Sprint, iss.Priority, iss.Updated, iss.Description,
+                            IsDone: iss.Status is not null && JiraTicketProvider.DoneStatuses.Contains(iss.Status.Trim())));
                     }
                 }
             }
