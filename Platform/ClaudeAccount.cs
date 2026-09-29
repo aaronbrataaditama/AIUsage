@@ -21,15 +21,33 @@ public static class ClaudeAccount
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json");
             if (!File.Exists(path)) return new ClaudeAccountInfo(null, null);
 
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var text = File.ReadAllText(path);
+            return Parse(text, DateTime.UtcNow);
+        }
+        catch
+        {
+            return new ClaudeAccountInfo(null, null);
+        }
+    }
+
+    /// <summary>Parse account info from JSON with a reference time for filtering reset dates.</summary>
+    internal static ClaudeAccountInfo Parse(string json, DateTime nowUtc)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
             var orgType = FindString(root, "organizationType");     // e.g. claude_team / claude_enterprise
             var userTier = FindString(root, "userRateLimitTier");   // e.g. default_claude_max_5x
             var resetRaw = FindString(root, "planLimitsEndDate");   // ISO date
 
-            DateTime? resets = DateTime.TryParse(
-                resetRaw, null, System.Globalization.DateTimeStyles.RoundtripKind, out var d) ? d : null;
+            DateTime? resets = null;
+            if (DateTime.TryParse(
+                resetRaw, null, System.Globalization.DateTimeStyles.RoundtripKind, out var d))
+            {
+                resets = d.ToUniversalTime() > nowUtc ? d : null;
+            }
 
             return new ClaudeAccountInfo(BuildPlan(orgType, userTier), resets);
         }
@@ -67,6 +85,7 @@ public static class ClaudeAccount
         foreach (var prefix in new[] { "default_claude_", "default_", "claude_" })
             if (t.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { t = t[prefix.Length..]; break; }
         if (t.Length == 0) return null;
+        if (t is "zero" or "none") return null;
         // "max_5x" -> ["max","5x"] -> "Max 5x"
         var parts = t.Split('_', StringSplitOptions.RemoveEmptyEntries)
             .Select(p => p.Length > 0 ? char.ToUpperInvariant(p[0]) + p[1..] : p);
