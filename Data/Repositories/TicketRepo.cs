@@ -1,20 +1,27 @@
+using AIUsage.Tickets;
 using Microsoft.Data.Sqlite;
 
 namespace AIUsage.Data.Repositories;
 
 public static class TicketRepo
 {
+    /// <summary>Transitional wrapper over <see cref="Upsert"/> for JIRA-only callers; Task 4 removes it.</summary>
     public static void UpsertFetched(SqliteConnection conn, string key, string? summary, string? status,
         string? issueType, string? project, string? sprint, string? priority, string? updated,
-        string? description = null)
+        string? description = null) =>
+        Upsert(conn, new TicketInfo(key, TicketProviderIds.Jira, summary, status, issueType,
+            project, sprint, priority, updated, description));
+
+    public static void Upsert(SqliteConnection conn, TicketInfo t)
     {
         using var cmd = conn.CreateCommand();
         // description is COALESCEd: bulk JQL search doesn't fetch it (passes null), so a search-based
         // upsert must not wipe a description populated by a full single-issue fetch.
         cmd.CommandText = """
-            INSERT INTO Tickets(key, summary, status, issue_type, project, sprint, priority, updated, description, last_synced, fetch_failed)
-            VALUES ($key, $summary, $status, $type, $project, $sprint, $priority, $updated, $description, $now, 0)
+            INSERT INTO Tickets(key, provider, summary, status, issue_type, project, sprint, priority, updated, description, last_synced, fetch_failed)
+            VALUES ($key, $provider, $summary, $status, $type, $project, $sprint, $priority, $updated, $description, $now, 0)
             ON CONFLICT(key) DO UPDATE SET
+                provider = excluded.provider,
                 summary = excluded.summary,
                 status = excluded.status,
                 issue_type = excluded.issue_type,
@@ -26,15 +33,16 @@ public static class TicketRepo
                 last_synced = excluded.last_synced,
                 fetch_failed = 0
             """;
-        cmd.Parameters.AddWithValue("$key", key);
-        cmd.Parameters.AddWithValue("$summary", (object?)summary ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$status", (object?)status ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$type", (object?)issueType ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$project", (object?)project ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$sprint", (object?)sprint ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$priority", (object?)priority ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$updated", (object?)updated ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$description", (object?)description ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$key", t.Key);
+        cmd.Parameters.AddWithValue("$provider", t.Provider);
+        cmd.Parameters.AddWithValue("$summary", (object?)t.Summary ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$status", (object?)t.Status ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$type", (object?)t.IssueType ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$project", (object?)t.Project ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$sprint", (object?)t.Sprint ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$priority", (object?)t.Priority ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$updated", (object?)t.Updated ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$description", (object?)t.Description ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
         cmd.ExecuteNonQuery();
     }
@@ -75,7 +83,7 @@ public static class TicketRepo
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT t.key, t.summary, t.status, t.issue_type AS issueType,
+            SELECT t.key, t.provider, t.summary, t.status, t.issue_type AS issueType,
                    t.project, t.sprint, t.priority, t.updated,
                    t.last_synced AS lastSynced, t.fetch_failed AS fetchFailed,
                    (SELECT COUNT(*) FROM SessionTicketLinks l WHERE l.ticket_key = t.key) AS sessionCount,
