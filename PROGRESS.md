@@ -1,6 +1,84 @@
 # PROGRESS — AI Usage Tracker
 
-_Last updated: 2026-09-09_
+_Last updated: 2026-09-29_
+
+## 2026-09-29: ClickUp ticket-tracker support + all-subscription usage panel — version bumped to **1.1.0**
+
+Branch `SupportClickUp` (226d964..f9a8699) adds a second ticket tracker (ClickUp) alongside JIRA, and
+generalizes the Live Code usage-limit panel to whatever windows a subscription actually has (rolling
+5h/7d/per-model for Pro/Max/Team, or a flat monthly spend cap for a spend-capped Enterprise seat).
+`<Version>` moves **1.0.1 → 1.1.0** (minor: new feature; the 1.0.1 bump was never actually published
+as a release, so there's nothing to preserve compatibility with there).
+
+**Ticket abstraction.** New `Tickets/` (`ITicketProvider`, `TicketInfo`/`TicketProviderIds`,
+`TicketProviders`, `JiraTicketProvider`, `ClickUpTicketProvider`, `TicketSync`) replaces the old
+JIRA-only `Jira/JiraSync.cs` (removed) so bridge handlers and Live Code fetch/route tickets without
+caring which tracker owns a key. Routing (`TicketProviders.ProviderIdFor`, config only, no network):
+a ClickUp **native** key (`CU-<id>`) always routes to ClickUp; a key whose project prefix is listed in
+the new `clickup_custom_id_prefixes` setting (ClickUp **Custom Task IDs**, e.g. `DEV-123`) also routes
+to ClickUp; everything else routes to JIRA. `Bridge/Handlers/JiraHandlers.cs` is renamed
+`TicketHandlers.cs` and its actions (`tickets.list/fetch/sync/fetchMore`) are provider-routed;
+`clickup.test` is new (verifies the token, lists workspaces, auto-fills `clickup_team_id` when there's
+exactly one).
+
+**Ticket-key grammar.** `Data/TicketKey` now accepts a second shape alongside the JIRA regex: ClickUp
+native `^CU-(?=[0-9a-z]*[a-z])[0-9a-z]{6,12}\z` — lowercase body kept as-is (ClickUp ids are
+case-sensitive), and the id must contain **at least one letter** so a JIRA project literally named
+`CU` (`CU-123456`, all digits) still parses as JIRA. Both regexes anchor `\z`, not `$` (a trailing
+newline would become an Enter keystroke when typed into the Live Code shell — this was already true of
+the JIRA regex, just never written down until this pass). A native key has no project part
+(`ProjectOf` → null), so the allowlist never applies to it; the *effective* allowlist the scanner and
+the settings purge apply is now the user's `project_key_allowlist` **∪** the enabled
+`clickup_custom_id_prefixes` (`SettingsStore.EffectiveKeyAllowlist`/`CombineAllowlist`; an empty user
+allowlist still means "allow everything"). The scanner only infers `CU-` keys from branch/cwd/prompt
+text when ClickUp is enabled (`TicketKeyInferrer`'s `clickUpNative` flag, read from
+`SettingsStore.ClickUpEnabled()`).
+
+**New settings keys**: `jira_enabled` (absent = ON, so existing installs are unaffected),
+`clickup_enabled` (absent = OFF), `clickup_token` (DPAPI, write-only — **never paste a real ClickUp
+token into Claude**, use `dotnet run -- --set clickup_token <token>` or the Settings UI),
+`clickup_team_id` (workspace id, digits only), `clickup_custom_id_prefixes`. Schema bumped to **v8**
+(`Tickets.provider`, backfilled `'jira'` for rows that already had a `last_synced` timestamp).
+
+**ClickUp client** (`ClickUp/ClickUpClient.cs`): read-only REST v2, personal API token sent raw in
+`Authorization` (no Bearer prefix — that's how ClickUp's personal-token auth works). The host
+(`https://api.clickup.com/api/v2`) is a **compile-time constant**, not a setting — deliberately, so
+there's no user-suppliable URL for the token to leak to (the class of bug `Jira/JiraSiteUrl.cs` exists
+to close for JIRA doesn't need re-solving here). `IsNotFound` treats a clean 404 **or** a 401/400 body
+whose `ECODE` starts with `ITEM_` as "not found" — ClickUp's docs describe returning those codes for a
+dead/foreign task instead of a clean 404. **Open item**: this mapping is covered by a unit test using a
+captured `ECODE:"ITEM_013"` shape from the docs, but has **not** been verified against a real ClickUp
+workspace — needs the user's own token to confirm live before we'd call it solid.
+
+**Live Code**: the ticket picker is now a merged JIRA+ClickUp list (`livecode.tickets` queries every
+enabled tracker concurrently, sorts by parsed instant — not raw string, since JIRA's no-colon offset
+and ClickUp's UTC `…Z` format don't compare correctly as strings — `LiveCodeHandlers.ParseUpdated`/
+`OrderByUpdatedDesc`, and reports one tracker's failure in `errors` without blanking the other's
+results); `livecode.config` adds `ticketsConfigured`/`ticketProviders`. The kickoff prompt names the
+owning tracker via a closed-set `TrackerLabel` enum (`Terminal/ClaudeCommand.BuildTicket`) — "JIRA
+ticket …" vs "ClickUp task …" — never a fetched string, so remote data can't reach that label.
+
+**Usage panel — generalized to whatever the subscription actually has.** `Platform/ClaudeUsage.cs`
+used to assume exactly two rolling windows (SESSION 5h, WEEK 7d). It now returns a variable-length
+`Bars` list built from whichever of `five_hour`/`seven_day`/`seven_day_opus`/`seven_day_sonnet` the
+`oauth/usage` endpoint includes, plus an `extra_usage` block mapped to a bar labelled **MONTHLY
+LIMIT** when it's the *only* bar present, or **EXTRA USAGE** when it supplements rolling windows.
+Verified against a **live Enterprise seat probe** (captured 2026-09-29, `ClaudeUsageTests`):
+`five_hour`/`seven_day`/`seven_day_opus`/`seven_day_sonnet` all `null`, `extra_usage` populated
+(`monthly_limit`/`used_credits` in **minor currency units**, e.g. `60000`/`22185.0` → $600.00/$221.85
+at `decimal_places:2`) — i.e. a spend-capped Enterprise seat has *no* rolling windows at all, only the
+monthly cap. `Platform/ClaudeAccount.cs`'s plan label was adjusted alongside this: a zero/none rate
+tier now contributes no tier text (so that Enterprise seat shows as plain "Enterprise", not
+"Enterprise · Zero"), and a `planLimitsEndDate` already in the past is hidden instead of shown stale.
+
+**New CLI verbs**: `--usagetest` (prints the Live Code usage bars), `--clickuptest <key>` (fetches one
+ClickUp task and prints it), and `--set clickup_token <token>`.
+
+**Open items for next time**:
+- ClickUp's `ECODE: ITEM_*` not-found mapping is an educated guess (see above) — confirm against a
+  real workspace once the user supplies a ClickUp token.
+- No UI screenshots taken yet for the ClickUp settings panel, tracker badges, or the new usage bars —
+  pending from the user (screen capture is never scripted in this repo; see CLAUDE.md).
 
 ## 2026-09-09: Session-detail cost — rate table refreshed and made version-aware
 
