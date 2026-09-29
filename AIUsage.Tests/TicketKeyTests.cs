@@ -83,6 +83,12 @@ public class TicketKeyTests
         Assert.Equal("DEV", TicketKey.ProjectOf("DEV-123"));
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("noDash")]
+    public void ProjectOf_returns_null_instead_of_throwing_for_a_dash_less_key(string key) =>
+        Assert.Null(TicketKey.ProjectOf(key));
+
     [Fact]
     public void Require_message_mentions_both_forms()
     {

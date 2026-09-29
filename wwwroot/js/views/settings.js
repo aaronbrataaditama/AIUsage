@@ -46,7 +46,9 @@ window.Views.settings = (function () {
         <div class="footnote">Stored DPAPI-encrypted for your Windows user. Create one under ClickUp → Settings → Apps.</div>
         <label>Workspace</label>
         ${cuWorkspaces && cuWorkspaces.length
-          ? `<select id="set-cu-team">${cuWorkspaces.map(w =>
+          ? `<select id="set-cu-team">${
+              cuWorkspaces.length > 1 && !s.clickupTeamId ? '<option value="">— pick a workspace —</option>' : ''
+            }${cuWorkspaces.map(w =>
               `<option value="${App.esc(w.id)}" ${w.id === s.clickupTeamId ? 'selected' : ''}>${App.esc(w.name)}</option>`).join('')}</select>`
           : `<input id="set-cu-team" placeholder="numeric workspace id (Test connection to list them)" value="${App.esc(s.clickupTeamId)}">`}
         <label>Custom Task ID prefixes</label>

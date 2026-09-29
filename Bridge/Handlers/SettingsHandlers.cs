@@ -98,11 +98,12 @@ public static partial class SettingsHandlers
             if (TryGetBool(payload, "jiraEnabled", out var jiraEnabled))
                 SettingsStore.Set("jira_enabled", jiraEnabled ? "1" : "0");
 
+            // Toggling clickupEnabled alone does NOT purge: it doesn't change which keys are
+            // allowed (that's the prefix/allowlist settings below), and the scanner can't
+            // re-infer a DEV-… auto-link once it's gone — only an actual prefix/allowlist change
+            // should trigger the purge.
             if (TryGetBool(payload, "clickupEnabled", out var clickupEnabled))
-            {
-                if (clickupEnabled != SettingsStore.ClickUpEnabled()) purgeNeeded = true;
                 SettingsStore.Set("clickup_enabled", clickupEnabled ? "1" : "0");
-            }
 
             // ClickUp token is write-only, same as the JIRA one: only overwrite on a new non-empty value.
             var clickupToken = SessionHandlers.GetString(payload, "clickupToken");

@@ -44,9 +44,14 @@ public static partial class TicketKey
         return t.ToUpperInvariant();
     }
 
-    /// <summary>Allowlist project part ("SFTY" for SFTY-1); null for a ClickUp native key.</summary>
-    public static string? ProjectOf(string key) =>
-        IsClickUpNative(key) ? null : key[..key.IndexOf('-')];
+    /// <summary>Allowlist project part ("SFTY" for SFTY-1); null for a ClickUp native key or a
+    /// dash-less key (e.g. a stray NULL-provider row) rather than throwing.</summary>
+    public static string? ProjectOf(string key)
+    {
+        if (IsClickUpNative(key)) return null;
+        var i = key.IndexOf('-');
+        return i > 0 ? key[..i] : null;
+    }
 
     /// <summary>Normalise and validate, throwing the message the UI toasts on failure.</summary>
     public static string Require(string? raw)

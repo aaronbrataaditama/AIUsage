@@ -52,8 +52,7 @@ public static class TicketHandlers
 
         router.Register("tickets.fetch", async payload =>
         {
-            var key = SessionHandlers.GetString(payload, "ticketKey")
-                ?? throw new ArgumentException("ticketKey is required");
+            var key = TicketKey.Require(SessionHandlers.GetString(payload, "ticketKey"));
             var provider = TicketProviders.For(key) ?? throw new InvalidOperationException(
                 $"{TrackerNameFor(TicketProviders.ProviderIdFor(key))} is not enabled/configured — see Settings");
             var found = await TicketSync.FetchOneAsync(provider, key);
