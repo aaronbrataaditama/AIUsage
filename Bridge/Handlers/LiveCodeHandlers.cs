@@ -2,7 +2,6 @@ using System.Text;
 using System.Text.Json;
 using AIUsage.Data;
 using AIUsage.Data.Repositories;
-using AIUsage.Jira;
 using AIUsage.Platform;
 using AIUsage.Scanner;
 using AIUsage.Settings;
@@ -26,6 +25,16 @@ public static class LiveCodeHandlers
     /// <c>livecode_ticket_count</c>; default 3, clamped 1..20).</summary>
     private static int TicketCount() =>
         int.TryParse(SettingsStore.Get("livecode_ticket_count"), out var n) ? Math.Clamp(n, 1, 20) : 3;
+
+    /// <summary>One provider's assigned-items fetch for the merged picker, with its own failure
+    /// captured rather than thrown — so one tracker erroring doesn't blank the other's tickets. The
+    /// exception's Message is the client's own readable text (never a token).</summary>
+    private static async Task<(List<TicketInfo> Tickets, string? ProviderName, string? ErrorMessage)>
+        FetchAssignedAsync(ITicketProvider provider, int max)
+    {
+        try { return (await provider.AssignedAsync(max), null, null); }
+        catch (Exception ex) { return (new List<TicketInfo>(), provider.DisplayName, ex.Message); }
+    }
 
     /// <summary>One <see cref="ConPtySession"/> per tab plus the metadata needed to locate its
     /// transcript and to Resume it after Stop. Mutated only under <see cref="Gate"/> because the
@@ -72,9 +81,11 @@ public static class LiveCodeHandlers
         router.Register("livecode.config", _ =>
         {
             var account = ClaudeAccount.Read();
+            var providers = TicketProviders.Enabled();
             return Task.FromResult<object?>(new
             {
-                jiraConfigured = JiraClient.FromSettings() is not null,
+                ticketsConfigured = providers.Count > 0,
+                ticketProviders = providers.Select(p => p.DisplayName).ToList(),
                 ticketCount = TicketCount(),
                 lastFolder = SettingsStore.Get("livecode_last_folder") ?? "",
                 lastShell = SettingsStore.Get("livecode_last_shell") ?? "powershell",
@@ -106,28 +117,35 @@ public static class LiveCodeHandlers
 
         router.Register("livecode.tickets", async _ =>
         {
-            var client = JiraClient.FromSettings();
-            if (client is null)
-                return new { configured = false, tickets = Array.Empty<object>() };
+            var providers = TicketProviders.Enabled();
+            if (providers.Count == 0)
+                return new { configured = false, tickets = Array.Empty<object>(), errors = Array.Empty<object>() };
 
-            // Fetch a larger page (newest first) then drop finished tickets by status name and take the
-            // configured count. Filtering client-side (vs JQL) avoids errors if a status name doesn't
-            // exist in this instance; the page is oversized so filtering still leaves enough to take.
+            // Query every enabled tracker concurrently, oversized (newest first) so the merged list
+            // still has enough left after taking the configured count. One tracker failing doesn't
+            // blank the other — its failure is reported in `errors` instead.
             var count = TicketCount();
-            var page = await client.SearchIssuesAsync(JiraTicketProvider.AssignedJql, nextPageToken: null,
-                maxResults: Math.Clamp(count * 3, 25, 60));
-            var tickets = page.Issues
-                .Where(i => i.Status is null || !JiraTicketProvider.DoneStatuses.Contains(i.Status.Trim()))
+            var max = Math.Clamp(count * 3, 25, 60);
+            var results = await Task.WhenAll(providers.Select(p => FetchAssignedAsync(p, max)));
+
+            var tickets = results.SelectMany(r => r.Tickets)
+                .OrderByDescending(t => t.Updated ?? "", StringComparer.Ordinal) // "" sorts lowest → nulls last
                 .Take(count)
-                .Select(i => new
+                .Select(t => new
                 {
-                    key = i.Key,
-                    summary = i.Summary,
-                    status = i.Status,
-                    issueType = i.IssueType,
-                    priority = i.Priority
+                    key = t.Key,
+                    summary = t.Summary,
+                    status = t.Status,
+                    issueType = t.IssueType,
+                    priority = t.Priority,
+                    provider = t.Provider,
+                    updated = t.Updated
                 }).ToList();
-            return new { configured = true, tickets };
+            var errors = results
+                .Where(r => r.ErrorMessage is not null)
+                .Select(r => new { provider = r.ProviderName, message = r.ErrorMessage })
+                .ToList();
+            return new { configured = true, tickets, errors };
         });
 
         router.Register("livecode.listAgents", payload =>
@@ -559,29 +577,32 @@ public static class LiveCodeHandlers
         {
             try
             {
-                var client = JiraClient.FromSettings();
-                if (client is not null)
+                var provider = TicketProviders.For(ticketKey);
+                if (provider is not null)
                 {
-                    var iss = await client.FetchIssueAsync(ticketKey);
-                    if (iss is not null)
+                    var info = await provider.FetchAsync(ticketKey);
+                    if (info is not null)
                     {
-                        ticketSummary ??= iss.Summary;
-                        description = iss.Description;
+                        ticketSummary ??= info.Summary;
+                        description = info.Description;
                         using var c = Db.Open();
-                        TicketRepo.Upsert(c, new TicketInfo(iss.Key, TicketProviderIds.Jira, iss.Summary, iss.Status,
-                            iss.IssueType, iss.Project, iss.Sprint, iss.Priority, iss.Updated, iss.Description,
-                            IsDone: iss.Status is not null && JiraTicketProvider.DoneStatuses.Contains(iss.Status.Trim())));
+                        TicketRepo.Upsert(c, info);
                     }
                 }
             }
             catch { /* kickoff proceeds with the summary the UI already has */ }
         }
 
+        // The kickoff prompt names the tracker that owns this key ("JIRA ticket …" vs "ClickUp
+        // task …"); an enum, not the fetched text, so no remote data can reach the label.
+        var trackerLabel = ticketKey is not null && TicketProviders.ProviderIdFor(ticketKey) == TicketProviderIds.ClickUp
+            ? TrackerLabel.ClickUp : TrackerLabel.Jira;
+
         // Pin an explicit session id so metrics read exactly this session's transcript.
         var sessionId = Guid.NewGuid().ToString();
         var kickoff = ticketKey is null
             ? null
-            : ClaudeCommand.BuildTicket(shell.Kind, ticketKey, ticketSummary, description, model, agentName, permissionMode, sessionId);
+            : ClaudeCommand.BuildTicket(shell.Kind, ticketKey, ticketSummary, description, model, agentName, permissionMode, sessionId, trackerLabel);
 
         // Record the ticket ↔ session link now (before the transcript exists).
         if (kickoff is not null && !string.IsNullOrWhiteSpace(launchFolder))
