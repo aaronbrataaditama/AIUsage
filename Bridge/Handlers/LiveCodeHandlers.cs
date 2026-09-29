@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using AIUsage.Data;
@@ -35,6 +36,22 @@ public static class LiveCodeHandlers
         try { return (await provider.AssignedAsync(max), null, null); }
         catch (Exception ex) { return (new List<TicketInfo>(), provider.DisplayName, ex.Message); }
     }
+
+    /// <summary>Parse a tracker's <c>Updated</c> string to a comparable instant. JIRA emits an offset
+    /// with no colon (e.g. "+0530"); ClickUp emits UTC "o" format ("…Z") — <see cref="DateTimeOffset.TryParse"/>
+    /// handles both, so ordinal string comparison (which does NOT reflect chronological order across
+    /// differing offsets) must never be used to merge the two trackers' lists. Null/unparseable sorts
+    /// last (via <see cref="DateTimeOffset.MinValue"/>, the smallest possible instant).</summary>
+    internal static DateTimeOffset? ParseUpdated(string? updated) =>
+        !string.IsNullOrWhiteSpace(updated) &&
+        DateTimeOffset.TryParse(updated, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dto)
+            ? dto : null;
+
+    /// <summary>Merge-sort helper for the Live Code ticket picker: newest first by the parsed instant,
+    /// not the raw string (see <see cref="ParseUpdated"/>). Extracted so it's unit-testable in
+    /// isolation from the bridge handler.</summary>
+    internal static IEnumerable<TicketInfo> OrderByUpdatedDesc(IEnumerable<TicketInfo> tickets) =>
+        tickets.OrderByDescending(t => ParseUpdated(t.Updated) ?? DateTimeOffset.MinValue);
 
     /// <summary>One <see cref="ConPtySession"/> per tab plus the metadata needed to locate its
     /// transcript and to Resume it after Stop. Mutated only under <see cref="Gate"/> because the
@@ -128,8 +145,7 @@ public static class LiveCodeHandlers
             var max = Math.Clamp(count * 3, 25, 60);
             var results = await Task.WhenAll(providers.Select(p => FetchAssignedAsync(p, max)));
 
-            var tickets = results.SelectMany(r => r.Tickets)
-                .OrderByDescending(t => t.Updated ?? "", StringComparer.Ordinal) // "" sorts lowest → nulls last
+            var tickets = OrderByUpdatedDesc(results.SelectMany(r => r.Tickets))
                 .Take(count)
                 .Select(t => new
                 {

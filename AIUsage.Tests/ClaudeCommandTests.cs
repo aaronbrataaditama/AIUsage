@@ -78,11 +78,13 @@ public class ClaudeCommandTests
         Assert.True(TailIsOneQuotedString(cmd, shell), cmd);
     }
 
-    [Fact]
-    public void BuildTicket_folds_unicode_double_quotes_too()
+    [Theory]
+    [InlineData(TrackerLabel.Jira)]
+    [InlineData(TrackerLabel.ClickUp)]
+    public void BuildTicket_folds_unicode_double_quotes_too(TrackerLabel tracker)
     {
         var cmd = ClaudeCommand.BuildTicket("powershell", "ABC-1", $"He said {CurlyDoubles[0]}hi{CurlyDoubles[1]}",
-            description: null, model: null, agentName: null, permissionMode: null, sessionId: "s1");
+            description: null, model: null, agentName: null, permissionMode: null, sessionId: "s1", trackerLabel: tracker);
 
         foreach (var ch in CurlyDoubles) Assert.DoesNotContain(ch, cmd);
     }
