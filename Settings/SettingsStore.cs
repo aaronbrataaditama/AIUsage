@@ -90,13 +90,35 @@ public static class SettingsStore
     }
 
     /// <summary>JIRA project keys allowed for ticket inference (comma-separated). Empty = allow all.</summary>
-    public static HashSet<string> ProjectKeyAllowlist()
+    public static HashSet<string> ProjectKeyAllowlist() => SplitKeys(Get("project_key_allowlist"));
+
+    /// <summary>JIRA is on unless explicitly disabled (pre-ClickUp installs have no row).</summary>
+    public static bool JiraEnabled() => Get("jira_enabled") != "0";
+
+    public static bool ClickUpEnabled() => Get("clickup_enabled") == "1";
+
+    /// <summary>Custom Task ID prefixes that belong to ClickUp (e.g. DEV,OPS), uppercased.</summary>
+    public static HashSet<string> ClickUpCustomIdPrefixes() => SplitKeys(Get("clickup_custom_id_prefixes"));
+
+    /// <summary>
+    /// The allowlist the scanner and the purge actually apply: the user's project allowlist plus the
+    /// ClickUp custom-ID prefixes. An empty user allowlist means "allow everything" and stays empty.
+    /// </summary>
+    public static HashSet<string> EffectiveKeyAllowlist() =>
+        CombineAllowlist(Get("project_key_allowlist"), ClickUpEnabled() ? Get("clickup_custom_id_prefixes") : null);
+
+    internal static HashSet<string> CombineAllowlist(string? raw, string? clickUpPrefixes)
     {
-        var raw = Get("project_key_allowlist") ?? "";
-        return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var set = SplitKeys(raw);
+        if (set.Count == 0) return set;
+        set.UnionWith(SplitKeys(clickUpPrefixes));
+        return set;
+    }
+
+    private static HashSet<string> SplitKeys(string? raw) =>
+        (raw ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(k => k.ToUpperInvariant())
             .ToHashSet();
-    }
 
     /// <summary>Only scan transcript files modified on/after this date. Null = scan everything.</summary>
     public static DateTime? BackfillFrom()

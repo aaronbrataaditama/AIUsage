@@ -1,6 +1,7 @@
 using AIUsage.Data;
 using AIUsage.Jira;
 using AIUsage.Settings;
+using Microsoft.Data.Sqlite;
 
 namespace AIUsage.Bridge.Handlers;
 
@@ -96,10 +97,21 @@ public static class SettingsHandlers
     /// </summary>
     public static void PurgeDisallowedAutoLinks()
     {
-        var allowed = SettingsStore.ProjectKeyAllowlist();
+        var allowed = SettingsStore.EffectiveKeyAllowlist();
         if (allowed.Count == 0) return; // empty allowlist = allow everything
 
         using var conn = Db.Open();
+        PurgeDisallowedAutoLinks(conn, allowed);
+    }
+
+    /// <summary>
+    /// The purge itself, against an explicit connection. Native ClickUp links (CU-&lt;id&gt;) have no
+    /// project part, so the allowlist never applies to them and they are always kept.
+    /// </summary>
+    internal static void PurgeDisallowedAutoLinks(SqliteConnection conn, HashSet<string> allowed)
+    {
+        if (allowed.Count == 0) return; // empty allowlist = allow everything
+
         using var tx = conn.BeginTransaction();
 
         var placeholders = string.Join(",", allowed.Select((_, i) => $"$p{i}"));
@@ -108,6 +120,7 @@ public static class SettingsHandlers
             cmd.CommandText = $"""
                 DELETE FROM SessionTicketLinks
                 WHERE source = 'auto'
+                  AND ticket_key NOT GLOB '{TicketKey.ClickUpNativeGlob}'
                   AND substr(ticket_key, 1, instr(ticket_key, '-') - 1) NOT IN ({placeholders});
 
                 UPDATE Sessions SET review_state = 'pending'
