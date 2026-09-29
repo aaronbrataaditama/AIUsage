@@ -88,6 +88,10 @@ internal static class Program
                 Console.WriteLine($"plan={acct.Plan ?? "(unknown)"} usageResetsAt={acct.UsageResetsAt?.ToString("o") ?? "(unknown)"}");
                 break;
 
+            case "--usagetest":
+                RunUsageTest();
+                break;
+
             case "--detailtest" when args.Length > 1:
                 RunDetailTest(args[1]);
                 break;
@@ -225,6 +229,22 @@ internal static class Program
 
         var info = provider.FetchAsync(key).GetAwaiter().GetResult();
         Console.WriteLine($"provider={providerId} found={info is not null} summary={info?.Summary ?? "(none)"}");
+    }
+
+    /// <summary>Headless check for the Live Code usage panel: one live GET to Anthropic's oauth/usage
+    /// endpoint, signed with the user's own Claude login (the same request the app makes every 60s).
+    /// Prints one line per bar (label, pct, resetsAt, detail) — never the token.</summary>
+    private static void RunUsageTest()
+    {
+        var u = Platform.ClaudeUsage.ReadAsync().GetAwaiter().GetResult();
+        if (u is null || !u.HasAny)
+        {
+            Console.WriteLine("(no usage data — signed out/offline)");
+            return;
+        }
+
+        foreach (var b in u.Bars)
+            Console.WriteLine($"{b.Label} {b.Pct:0}% {b.ResetsAt?.ToString("o") ?? "-"} {b.Detail ?? ""}");
     }
 
     /// <summary>Headless smoke test for the ConPTY interop (Terminal/ConPtySession): spawns

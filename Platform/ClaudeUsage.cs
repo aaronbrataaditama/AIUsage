@@ -4,19 +4,22 @@ using System.Text.Json;
 
 namespace AIUsage.Platform;
 
+/// <summary>One bar on the Live Code usage panel. Pct is server-computed (0–100).</summary>
+public sealed record UsageBar(string Id, string Label, double Pct, DateTime? ResetsAt, string? Detail);
+
 /// <summary>Rolling usage snapshot from Anthropic's OAuth usage endpoint — the same one Claude
-/// Code's <c>/usage</c> command reads: a 5-hour "session" window and a 7-day "week" window, each a
-/// server-computed <c>utilization</c> percent (0–100) plus a reset time. Percent + limits are
-/// computed server-side (no local quota table); we just surface them.</summary>
-public sealed record ClaudeUsageInfo(
-    double? SessionPct, DateTime? SessionResetsAt,
-    double? WeekPct, DateTime? WeekResetsAt)
+/// Code's <c>/usage</c> command reads. Every subscription surfaces a different subset of windows
+/// (5-hour + 7-day for Pro; those plus per-model 7-day caps for Max/Team; a monthly spend limit
+/// instead of any rolling window for Enterprise seats with a spend cap), so the bars are a flat,
+/// ordered list rather than fixed fields. Percent + limits are computed server-side (no local quota
+/// table); we just surface them.</summary>
+public sealed record ClaudeUsageInfo(IReadOnlyList<UsageBar> Bars)
 {
-    public bool HasAny => SessionPct is not null || WeekPct is not null;
+    public bool HasAny => Bars.Count > 0;
 }
 
 /// <summary>
-/// Reads the rolling session/week usage bars shown on the Live Code page. Authenticates the
+/// Reads the rolling usage bars shown on the Live Code page. Authenticates the
 /// <c>oauth/usage</c> GET with the access token from <c>~/.claude/.credentials.json</c>
 /// (<c>claudeAiOauth.accessToken</c>) — the token is used only to sign this request and is never
 /// stored, logged, or returned. Best-effort throughout: any problem (no token, expired, offline,
@@ -65,34 +68,65 @@ public static class ClaudeUsage
         }
     }
 
-    /// <summary>Map the endpoint's <c>five_hour</c>/<c>seven_day</c> windows to the session/week bars.</summary>
+    // Rolling windows, in display order. Unknown/codenamed keys (e.g. "nimbus_quill") are ignored —
+    // we don't know what they mean, so we don't guess a label.
+    private static readonly (string Id, string Label)[] Windows =
+    [
+        ("five_hour", "SESSION"),
+        ("seven_day", "WEEK"),
+        ("seven_day_opus", "WEEK · OPUS"),
+        ("seven_day_sonnet", "WEEK · SONNET"),
+    ];
+
+    /// <summary>Map the endpoint's windows (rolling 5h/7d/per-model, or an Enterprise monthly spend
+    /// cap in place of any rolling window) to display bars.</summary>
     internal static ClaudeUsageInfo Parse(string json)
     {
-        double? sPct = null, wPct = null;
-        DateTime? sResets = null, wResets = null;
+        var bars = new List<UsageBar>();
         try
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             if (root.ValueKind == JsonValueKind.Object)
             {
-                ReadWindow(root, "five_hour", ref sPct, ref sResets);
-                ReadWindow(root, "seven_day", ref wPct, ref wResets);
+                foreach (var (id, label) in Windows)
+                    ReadWindow(root, id, label, bars);
+
+                if (root.TryGetProperty("extra_usage", out var x) && x.ValueKind == JsonValueKind.Object
+                    && x.TryGetProperty("is_enabled", out var en) && en.ValueKind == JsonValueKind.True
+                    && x.TryGetProperty("monthly_limit", out var lim) && lim.TryGetDouble(out var limit) && limit > 0)
+                {
+                    var dp = x.TryGetProperty("decimal_places", out var d) && d.TryGetInt32(out var n) ? Math.Clamp(n, 0, 4) : 2;
+                    var scale = Math.Pow(10, dp);
+                    var used = x.TryGetProperty("used_credits", out var uc) && uc.TryGetDouble(out var u) ? u : 0;
+                    var reached = x.TryGetProperty("spend_limit_reached", out var r) && r.ValueKind == JsonValueKind.True;
+                    var pct = reached ? 100 : x.TryGetProperty("utilization", out var ut) && ut.TryGetDouble(out var p) ? p : used / limit * 100;
+                    var cur = x.TryGetProperty("currency", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : "USD";
+                    string Money(double minor) => (cur == "USD" ? "$" : cur + " ") +
+                        (minor / scale).ToString("N" + dp, System.Globalization.CultureInfo.InvariantCulture);
+                    var detail = $"{Money(used)} / {Money(limit)}" + (reached ? " · limit reached" : "");
+                    // "MONTHLY LIMIT" when this is the only window (Enterprise spend-capped seat, no
+                    // 5h/7d rolling windows at all); "EXTRA USAGE" when it supplements Pro/Max/Team windows.
+                    bars.Add(new UsageBar("extra_usage", bars.Count == 0 ? "MONTHLY LIMIT" : "EXTRA USAGE", pct, null, detail));
+                }
             }
         }
         catch (JsonException) { /* malformed — surface whatever parsed */ }
-        return new ClaudeUsageInfo(sPct, sResets, wPct, wResets);
+        return new ClaudeUsageInfo(bars);
     }
 
-    private static void ReadWindow(JsonElement root, string name, ref double? pct, ref DateTime? resets)
+    private static void ReadWindow(JsonElement root, string id, string label, List<UsageBar> bars)
     {
-        if (!root.TryGetProperty(name, out var win) || win.ValueKind != JsonValueKind.Object) return;
-        if (win.TryGetProperty("utilization", out var u) && u.ValueKind == JsonValueKind.Number)
-            pct = u.GetDouble();
+        if (!root.TryGetProperty(id, out var win) || win.ValueKind != JsonValueKind.Object) return;
+        if (!win.TryGetProperty("utilization", out var u) || u.ValueKind != JsonValueKind.Number) return;
+
+        DateTime? resets = null;
         if (win.TryGetProperty("resets_at", out var r) && r.ValueKind == JsonValueKind.String
             && DateTime.TryParse(r.GetString(), null,
                 System.Globalization.DateTimeStyles.RoundtripKind, out var d))
             resets = d;
+
+        bars.Add(new UsageBar(id, label, u.GetDouble(), resets, null));
     }
 
     /// <summary>OAuth access token from <c>~/.claude/.credentials.json</c>, or null if the file is

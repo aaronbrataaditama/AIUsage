@@ -708,29 +708,31 @@ window.Views.livecode = (function () {
     } catch { /* transient */ }
   }
 
-  // Rolling usage-limit bars (session 5h + week 7d) from livecode.usage — server-computed % + reset
-  // time, backend-cached 5 min. Silently hidden when signed out / offline (available:false).
+  // Usage-limit bars from livecode.usage — server-computed % + reset time, backend-cached 5 min.
+  // The bar set varies by subscription (rolling windows for Pro/Max/Team, a monthly spend cap for
+  // Enterprise seats with one) — render whatever bars come back, in the order given. Silently
+  // hidden when signed out / offline (available:false).
   async function pollUsage() {
     const host = document.getElementById('lc-usage');
     if (!host) return;
     try {
       const u = await Bridge.call('livecode.usage', {}, 0);
       if (!u || !u.available) { host.innerHTML = ''; return; }
-      host.innerHTML = usageRow('SESSION', u.sessionPct, u.sessionResetsAt)
-                     + usageRow('WEEK', u.weekPct, u.weekResetsAt);
+      host.innerHTML = (u.bars || []).map(b => usageRow(b.label, b.pct, b.resetsAt, b.detail)).join('');
     } catch { /* transient — keep last render */ }
   }
 
-  // One usage bar row: clamped fill + threshold color (≥95% crit, ≥80% warn) + "N% · resets …".
-  function usageRow(label, pct, resetsAt) {
+  // One usage bar row: clamped fill + threshold color (≥95% crit, ≥80% warn) + "N% · resets … · detail".
+  function usageRow(label, pct, resetsAt, detail) {
     if (pct == null) return '';
     const c = Math.max(0, Math.min(100, Number(pct) || 0));
     const cls = c >= 95 ? ' crit' : c >= 80 ? ' warn' : '';
     const reset = resetsAt ? ` · resets ${App.esc(fmtReset(resetsAt))}` : '';
+    const det = detail ? ` · ${App.esc(detail)}` : '';
     return `<div class="lc-usage-row">
       <span class="lc-usage-label">${App.esc(label)}</span>
       <div class="lc-bar-track"><div class="lc-bar-fill${cls}" style="width:${c}%"></div></div>
-      <span class="lc-usage-pct">${Math.round(c)}%${reset}</span>
+      <span class="lc-usage-pct">${Math.round(c)}%${reset}${det}</span>
     </div>`;
   }
 

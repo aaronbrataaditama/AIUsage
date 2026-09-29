@@ -402,9 +402,11 @@ public static class LiveCodeHandlers
             return Task.FromResult<object?>(new { activeSessions = list });
         });
 
-        // Rolling usage-limit bars (session 5h + week 7d) from Anthropic's oauth/usage endpoint —
-        // server-computed percentages, cached 5 min in ClaudeUsage so polling is cheap. Best-effort:
-        // returns available:false when signed out / offline so the page just hides the bars.
+        // Usage-limit bars from Anthropic's oauth/usage endpoint — server-computed percentages,
+        // cached 5 min in ClaudeUsage so polling is cheap. The bar set varies by subscription
+        // (rolling 5h/7d/per-model windows for Pro/Max/Team, a monthly spend cap for Enterprise
+        // seats with one). Best-effort: returns available:false when signed out / offline so the
+        // page just hides the bars.
         router.Register("livecode.usage", async _ =>
         {
             var u = await ClaudeUsage.ReadAsync();
@@ -412,10 +414,8 @@ public static class LiveCodeHandlers
             return new
             {
                 available = true,
-                sessionPct = u.SessionPct,
-                sessionResetsAt = u.SessionResetsAt?.ToString("o"),
-                weekPct = u.WeekPct,
-                weekResetsAt = u.WeekResetsAt?.ToString("o")
+                bars = u.Bars.Select(b => new
+                    { id = b.Id, label = b.Label, pct = b.Pct, resetsAt = b.ResetsAt?.ToString("o"), detail = b.Detail })
             };
         });
 
