@@ -94,13 +94,23 @@ public static class ClaudeUsage
 
                 if (root.TryGetProperty("extra_usage", out var x) && x.ValueKind == JsonValueKind.Object
                     && x.TryGetProperty("is_enabled", out var en) && en.ValueKind == JsonValueKind.True
-                    && x.TryGetProperty("monthly_limit", out var lim) && lim.TryGetDouble(out var limit) && limit > 0)
+                    && x.TryGetProperty("monthly_limit", out var lim) && lim.ValueKind == JsonValueKind.Number
+                    && lim.TryGetDouble(out var limit) && limit > 0)
                 {
-                    var dp = x.TryGetProperty("decimal_places", out var d) && d.TryGetInt32(out var n) ? Math.Clamp(n, 0, 4) : 2;
+                    // Every TryGet* below is guarded by a ValueKind == Number check first: the
+                    // endpoint can send `null` for any of these (e.g. mid-rollout), and
+                    // JsonElement.TryGetDouble/TryGetInt32 throw InvalidOperationException — not
+                    // return false — for a non-Number element, which used to escape this try and
+                    // blank the whole cached snapshot (SESSION/WEEK bars included).
+                    var dp = x.TryGetProperty("decimal_places", out var d) && d.ValueKind == JsonValueKind.Number
+                        && d.TryGetInt32(out var n) ? Math.Clamp(n, 0, 4) : 2;
                     var scale = Math.Pow(10, dp);
-                    var used = x.TryGetProperty("used_credits", out var uc) && uc.TryGetDouble(out var u) ? u : 0;
+                    var used = x.TryGetProperty("used_credits", out var uc) && uc.ValueKind == JsonValueKind.Number
+                        && uc.TryGetDouble(out var u) ? u : 0;
                     var reached = x.TryGetProperty("spend_limit_reached", out var r) && r.ValueKind == JsonValueKind.True;
-                    var pct = reached ? 100 : x.TryGetProperty("utilization", out var ut) && ut.TryGetDouble(out var p) ? p : used / limit * 100;
+                    var pct = reached ? 100
+                        : x.TryGetProperty("utilization", out var ut) && ut.ValueKind == JsonValueKind.Number && ut.TryGetDouble(out var p)
+                            ? p : used / limit * 100;
                     var cur = x.TryGetProperty("currency", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : "USD";
                     string Money(double minor) => (cur == "USD" ? "$" : cur + " ") +
                         (minor / scale).ToString("N" + dp, System.Globalization.CultureInfo.InvariantCulture);
@@ -111,7 +121,10 @@ public static class ClaudeUsage
                 }
             }
         }
-        catch (JsonException) { /* malformed — surface whatever parsed */ }
+        // Broadened from JsonException: a value of the wrong CLR type deep in extra_usage (e.g. a
+        // string where a number was expected) throws InvalidOperationException, not JsonException —
+        // either way, surface whatever windows parsed rather than losing the whole snapshot.
+        catch (Exception) { /* malformed — surface whatever parsed */ }
         return new ClaudeUsageInfo(bars);
     }
 

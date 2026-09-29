@@ -40,7 +40,9 @@ public sealed class ClickUpClient
         if (IsNotFound(code, body)) return null;
         EnsureOk(code, body);
         using var doc = JsonDocument.Parse(body);
-        return ParseTask(doc.RootElement, key);
+        // requestedKey is always non-null here, so ParseTask's custom_id fallback never runs —
+        // customPrefixes is irrelevant on this path, but still sourced from config for consistency.
+        return ParseTask(doc.RootElement, key, SettingsStore.ClickUpCustomIdPrefixes());
     }
 
     public async Task<(List<TicketInfo> Tasks, bool IsLast)> AssignedAsync(int page)
@@ -53,7 +55,7 @@ public sealed class ClickUpClient
             $"&subtasks=true&include_closed=false&include_markdown_description=false&page={page}");
         EnsureOk(code, body);
         using var doc = JsonDocument.Parse(body);
-        var list = ParseTaskList(doc.RootElement);
+        var list = ParseTaskList(doc.RootElement, SettingsStore.ClickUpCustomIdPrefixes());
         var isLast = !doc.RootElement.TryGetProperty("last_page", out var lp) || lp.ValueKind != JsonValueKind.False;
         return (list, isLast);
     }
@@ -86,12 +88,23 @@ public sealed class ClickUpClient
         return $"/task/{Uri.EscapeDataString(key)}?custom_task_ids=true&team_id={Uri.EscapeDataString(teamId)}&include_markdown_description=true";
     }
 
-    internal static TicketInfo ParseTask(JsonElement t, string? requestedKey)
+    /// <summary>
+    /// <paramref name="customPrefixes"/> is the configured ClickUp Custom Task ID prefix set
+    /// (<c>clickup_custom_id_prefixes</c>): a syntactically valid <c>custom_id</c> (e.g. "DEV-42")
+    /// is only used as the key when its project part is in that set. Otherwise it falls back to
+    /// "CU-&lt;id&gt;" — an unconfigured prefix must never be kept, or
+    /// <see cref="AIUsage.Tickets.TicketProviders.ProviderIdFor(string)"/> would route the key to
+    /// JIRA instead of ClickUp (wrong tracker, wrong ticket data upserted over the ClickUp row).
+    /// Irrelevant when <paramref name="requestedKey"/> is supplied (a fetch-by-key always keeps
+    /// the key it was asked for).
+    /// </summary>
+    internal static TicketInfo ParseTask(JsonElement t, string? requestedKey, HashSet<string> customPrefixes)
     {
         var id = Str(t, "id") ?? "";
         var custom = TicketKey.Normalize(Str(t, "custom_id"));
-        var key = requestedKey
-                  ?? (TicketKey.IsValid(custom) && !TicketKey.IsClickUpNative(custom) ? custom : TicketKey.Normalize("CU-" + id));
+        var customUsable = TicketKey.IsValid(custom) && !TicketKey.IsClickUpNative(custom)
+            && TicketKey.ProjectOf(custom) is { } customProject && customPrefixes.Contains(customProject);
+        var key = requestedKey ?? (customUsable ? custom : TicketKey.Normalize("CU-" + id));
 
         var statusType = t.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.Object ? Str(s, "type") : null;
         var folder = Nested(t, "folder", "name");
@@ -116,14 +129,14 @@ public sealed class ClickUpClient
 
     /// <summary>Parses the "tasks" array of an /team/{team}/task response, dropping any task whose
     /// id (with no usable custom_id) doesn't fold into a valid key — never persist/return a bad key.</summary>
-    internal static List<TicketInfo> ParseTaskList(JsonElement root)
+    internal static List<TicketInfo> ParseTaskList(JsonElement root, HashSet<string> customPrefixes)
     {
         var list = new List<TicketInfo>();
         if (root.TryGetProperty("tasks", out var arr) && arr.ValueKind == JsonValueKind.Array)
             foreach (var t in arr.EnumerateArray())
             {
                 if (Str(t, "id") is null) continue;
-                var info = ParseTask(t, null) with { Description = null };
+                var info = ParseTask(t, null, customPrefixes) with { Description = null };
                 if (TicketKey.IsValid(info.Key)) list.Add(info);
             }
         return list;

@@ -53,6 +53,14 @@ public static class LiveCodeHandlers
     internal static IEnumerable<TicketInfo> OrderByUpdatedDesc(IEnumerable<TicketInfo> tickets) =>
         tickets.OrderByDescending(t => ParseUpdated(t.Updated) ?? DateTimeOffset.MinValue);
 
+    /// <summary>Merge multiple providers' assigned-ticket lists for the Live Code picker: drop
+    /// finished tickets first (a done ticket must never occupy a picker slot, even if it's the
+    /// most recently updated one — dropping it AFTER <c>Take(count)</c> would just shrink the
+    /// list instead of surfacing the next open ticket), then rank newest-first and take the
+    /// configured count. Extracted so it's unit-testable without a network call.</summary>
+    internal static List<TicketInfo> MergeForPicker(IEnumerable<TicketInfo> tickets, int count) =>
+        OrderByUpdatedDesc(tickets.Where(t => !t.IsDone)).Take(count).ToList();
+
     /// <summary>One <see cref="ConPtySession"/> per tab plus the metadata needed to locate its
     /// transcript and to Resume it after Stop. Mutated only under <see cref="Gate"/> because the
     /// ConPTY output/exit callbacks fire on the PTY read thread while handlers run on bridge pool
@@ -145,8 +153,7 @@ public static class LiveCodeHandlers
             var max = Math.Clamp(count * 3, 25, 60);
             var results = await Task.WhenAll(providers.Select(p => FetchAssignedAsync(p, max)));
 
-            var tickets = OrderByUpdatedDesc(results.SelectMany(r => r.Tickets))
-                .Take(count)
+            var tickets = MergeForPicker(results.SelectMany(r => r.Tickets), count)
                 .Select(t => new
                 {
                     key = t.Key,

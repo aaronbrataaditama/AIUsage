@@ -64,4 +64,19 @@ public class ClaudeUsageTests
     [InlineData("{not json")]
     [InlineData("""{"extra_usage":{"is_enabled":true,"monthly_limit":0}}""")]   // no cap → no bar
     public void Parse_degrades_to_no_bars(string json) => Assert.False(ClaudeUsage.Parse(json).HasAny);
+
+    [Fact]
+    public void Parse_ignores_null_extra_usage_fields_and_keeps_rolling_bars()
+    {
+        // Null (non-Number) extra_usage fields used to throw InvalidOperationException out of
+        // JsonElement.TryGetDouble/TryGetInt32 mid-parse, which escaped the JsonException-only
+        // catch and blanked the whole cached usage snapshot — losing the SESSION/WEEK bars too.
+        var json = """
+            {"five_hour":{"utilization":12.0,"resets_at":"2026-09-29T15:00:00+00:00"},
+             "extra_usage":{"is_enabled":true,"monthly_limit":null,"utilization":null,"decimal_places":null}}
+            """;
+        var bars = ClaudeUsage.Parse(json).Bars;
+        var bar = Assert.Single(bars);
+        Assert.Equal("SESSION", bar.Label);
+    }
 }

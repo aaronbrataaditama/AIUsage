@@ -12,8 +12,8 @@ namespace AIUsage.Tests;
 /// </summary>
 public class LiveCodeHandlersTests
 {
-    private static TicketInfo Ticket(string key, string provider, string? updated) =>
-        new(key, provider, "Summary", "Open", "Task", "PROJ", null, "Medium", updated);
+    private static TicketInfo Ticket(string key, string provider, string? updated, bool isDone = false) =>
+        new(key, provider, "Summary", "Open", "Task", "PROJ", null, "Medium", updated, Description: null, IsDone: isDone);
 
     [Fact]
     public void ParseUpdated_handles_jiras_colonless_offset_and_clickups_utc_o_format()
@@ -50,6 +50,23 @@ public class LiveCodeHandlersTests
 
         Assert.Equal("CU-2", ordered[0].Key);
         Assert.Equal("ABC-1", ordered[1].Key);
+    }
+
+    [Fact]
+    public void MergeForPicker_drops_done_tickets_before_taking_count()
+    {
+        // A done ticket must never surface in the Live Code picker, even if it's the most
+        // recently updated one — it would otherwise outrank an open ticket and, with Take(count),
+        // could push the open one off the list entirely.
+        var done = Ticket("ABC-1", TicketProviderIds.Jira, "2024-01-15T10:30:00.000+0000", isDone: true);
+        var open1 = Ticket("ABC-2", TicketProviderIds.Jira, "2024-01-14T10:30:00.000+0000");
+        var open2 = Ticket("ABC-3", TicketProviderIds.Jira, "2024-01-13T10:30:00.000+0000");
+
+        var merged = LiveCodeHandlers.MergeForPicker(new[] { done, open1, open2 }, count: 2);
+
+        Assert.Equal(2, merged.Count);
+        Assert.DoesNotContain(merged, t => t.Key == "ABC-1");
+        Assert.Equal(["ABC-2", "ABC-3"], merged.Select(t => t.Key).ToList());
     }
 
     [Fact]

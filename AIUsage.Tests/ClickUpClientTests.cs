@@ -17,10 +17,12 @@ public class ClickUpClientTests
           "date_updated": "1758700800000", "custom_item_id": null }
         """;
 
+    private static readonly HashSet<string> NoPrefixes = new();
+
     [Fact]
     public void ParseTask_maps_native_task()
     {
-        var t = ClickUpClient.ParseTask(J(Task), requestedKey: null);
+        var t = ClickUpClient.ParseTask(J(Task), requestedKey: null, NoPrefixes);
         Assert.Equal("CU-86b1abcde", t.Key);
         Assert.Equal("clickup", t.Provider);
         Assert.Equal("Fix login", t.Summary);
@@ -40,21 +42,34 @@ public class ClickUpClientTests
     public void ParseTask_prefers_valid_custom_id_and_keeps_requested_key()
     {
         var withCustom = Task.Replace("\"custom_id\": null", "\"custom_id\": \"dev-42\"");
-        Assert.Equal("DEV-42", ClickUpClient.ParseTask(J(withCustom), null).Key);
+        var prefixes = new HashSet<string> { "DEV" };
+        Assert.Equal("DEV-42", ClickUpClient.ParseTask(J(withCustom), null, prefixes).Key);
         // A fetch by native key keeps the key it was asked for, so the linked row is the one updated.
-        Assert.Equal("CU-86b1abcde", ClickUpClient.ParseTask(J(withCustom), "CU-86b1abcde").Key);
+        Assert.Equal("CU-86b1abcde", ClickUpClient.ParseTask(J(withCustom), "CU-86b1abcde", prefixes).Key);
+    }
+
+    [Fact]
+    public void ParseTask_falls_back_to_CU_id_when_custom_id_prefix_not_configured()
+    {
+        // DEV-42 is a syntactically valid key, but if the user never configured "DEV" as a
+        // ClickUp Custom Task ID prefix, keeping it would make TicketProviders.ProviderIdFor
+        // route this ticket to JIRA — wrong tracker, wrong ticket description, and JIRA data
+        // upserted over the ClickUp row.
+        var withCustom = Task.Replace("\"custom_id\": null", "\"custom_id\": \"dev-42\"");
+        Assert.Equal("CU-86b1abcde", ClickUpClient.ParseTask(J(withCustom), null, NoPrefixes).Key);
+        Assert.Equal("CU-86b1abcde", ClickUpClient.ParseTask(J(withCustom), null, new HashSet<string> { "OPS" }).Key);
     }
 
     [Theory]
     [InlineData("done")]
     [InlineData("closed")]
     public void ParseTask_marks_finished_status_types_done(string type) =>
-        Assert.True(ClickUpClient.ParseTask(J(Task.Replace("\"type\": \"custom\"", $"\"type\": \"{type}\"")), null).IsDone);
+        Assert.True(ClickUpClient.ParseTask(J(Task.Replace("\"type\": \"custom\"", $"\"type\": \"{type}\"")), null, NoPrefixes).IsDone);
 
     [Fact]
     public void ParseTask_tolerates_missing_optional_fields()
     {
-        var t = ClickUpClient.ParseTask(J("""{ "id": "86b1abcde", "name": "x", "priority": null }"""), null);
+        var t = ClickUpClient.ParseTask(J("""{ "id": "86b1abcde", "name": "x", "priority": null }"""), null, NoPrefixes);
         Assert.Null(t.Priority); Assert.Null(t.Status); Assert.Null(t.Description); Assert.Null(t.Sprint);
     }
 
@@ -86,7 +101,7 @@ public class ClickUpClientTests
     public void ParseTaskList_maps_all_valid_tasks()
     {
         var root = J($$"""{ "tasks": [{{Task}}], "last_page": false }""");
-        var list = ClickUpClient.ParseTaskList(root);
+        var list = ClickUpClient.ParseTaskList(root, NoPrefixes);
         Assert.Single(list);
         Assert.Equal("CU-86b1abcde", list[0].Key);
         // AssignedAsync results never carry the description (not requested from the list endpoint).
@@ -100,14 +115,14 @@ public class ClickUpClientTests
         // chars) and isn't a valid JIRA-style key either ("CU-X" has no digits after the dash) —
         // this must never be persisted or returned, per the controller's ruling.
         var root = J("""{ "tasks": [{ "id": "x", "name": "bad id" }] }""");
-        Assert.Empty(ClickUpClient.ParseTaskList(root));
+        Assert.Empty(ClickUpClient.ParseTaskList(root, NoPrefixes));
     }
 
     [Fact]
     public void ParseTaskList_ignores_task_missing_id_and_reads_last_page_flag()
     {
         var root = J("""{ "tasks": [{ "name": "no id at all" }] }""");
-        Assert.Empty(ClickUpClient.ParseTaskList(root));
+        Assert.Empty(ClickUpClient.ParseTaskList(root, NoPrefixes));
     }
 
     [Fact]
