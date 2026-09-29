@@ -42,7 +42,7 @@ internal static class Program
         Bridge.Handlers.AppHandlers.Register(router);
         Bridge.Handlers.SessionHandlers.Register(router);
         Bridge.Handlers.ManualHandlers.Register(router);
-        Bridge.Handlers.JiraHandlers.Register(router);
+        Bridge.Handlers.TicketHandlers.Register(router);
         Bridge.Handlers.SettingsHandlers.Register(router);
         Bridge.Handlers.StatsHandlers.Register(router);
         Bridge.Handlers.ExportHandlers.Register(router);
@@ -90,6 +90,10 @@ internal static class Program
 
             case "--detailtest" when args.Length > 1:
                 RunDetailTest(args[1]);
+                break;
+
+            case "--clickuptest" when args.Length > 1:
+                RunClickUpTest(args[1]);
                 break;
 
             case "--sql" when args.Length > 1:
@@ -148,6 +152,8 @@ internal static class Program
                 }
                 if (args[1] == "jira_token")
                     Settings.SettingsStore.SetProtected("jira_token", args[2]);
+                else if (args[1] == "clickup_token")
+                    Settings.SettingsStore.SetProtected("clickup_token", args[2]);
                 else
                     Settings.SettingsStore.Set(args[1], args[2]);
                 if (args[1] == "project_key_allowlist")
@@ -189,6 +195,36 @@ internal static class Program
         Console.WriteLine("skills: " + string.Join(" · ", d.Skills.Select(kv => $"{kv.Key} ×{kv.Value}")));
         Console.WriteLine("hooks: " + string.Join(" · ", d.Hooks.Select(kv => $"{kv.Key} ×{kv.Value}")));
         Console.WriteLine($"sub-agents: inOut={sub.InOut} cache={sub.Cache}");
+    }
+
+    /// <summary>Headless check for provider routing + a live fetch: normalizes the key, resolves
+    /// the tracker that owns it via <see cref="Tickets.TicketProviders.For"/>, and fetches it.
+    /// Never prints the token — only the resolved provider id and the fetched summary.</summary>
+    private static void RunClickUpTest(string rawKey)
+    {
+        string key;
+        try
+        {
+            key = Data.TicketKey.Require(rawKey);
+        }
+        catch (ArgumentException ex)
+        {
+            Console.WriteLine(ex.Message);
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        var providerId = Tickets.TicketProviders.ProviderIdFor(key);
+        var provider = Tickets.TicketProviders.For(key);
+        if (provider is null)
+        {
+            Console.WriteLine($"provider={providerId} not enabled/configured");
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        var info = provider.FetchAsync(key).GetAwaiter().GetResult();
+        Console.WriteLine($"provider={providerId} found={info is not null} summary={info?.Summary ?? "(none)"}");
     }
 
     /// <summary>Headless smoke test for the ConPTY interop (Terminal/ConPtySession): spawns
