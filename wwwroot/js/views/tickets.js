@@ -10,9 +10,14 @@ window.Views.tickets = (function () {
     lowest: '#898781', trivial: '#898781'
   };
 
+  // Tracker id -> display label, for the per-key provider badge and toasts.
+  const TRACKER_LABEL = { jira: 'JIRA', clickup: 'ClickUp' };
+
   // View state (persists across re-renders via the module closure).
   let aiOnly = false;
-  let nextPageToken = null; // JQL fetch pagination cursor; null = start from the first page
+  // Fetch-more pagination cursor, kept separately per tracker (JIRA pages via an opaque token,
+  // ClickUp via a page number — both surfaced uniformly as "cursor" by tickets.fetchMore).
+  let cursors = { jira: null, clickup: null };
 
   const isAiTouched = t => (t.sessionCount || 0) > 0 || (t.manualCount || 0) > 0;
 
@@ -35,9 +40,12 @@ window.Views.tickets = (function () {
   }
 
   async function load(el) {
-    let tickets;
+    let tickets, settings;
     try {
-      tickets = await Bridge.call('tickets.list');
+      [tickets, settings] = await Promise.all([
+        Bridge.call('tickets.list'),
+        Bridge.call('settings.get')
+      ]);
     } catch (e) {
       el.innerHTML = `<div class="panel empty">Failed to load tickets: ${App.esc(e.message)}</div>`;
       return;
@@ -46,10 +54,15 @@ window.Views.tickets = (function () {
     const aiCount = tickets.filter(isAiTouched).length;
     const shown = aiOnly ? tickets.filter(isAiTouched) : tickets;
 
+    const fetchButtons = [
+      settings.jiraEnabled ? `<button id="fetch-more-jira" class="btn" onclick="Views.tickets.fetchMore('jira')">Fetch more from JIRA</button>` : '',
+      settings.clickupEnabled ? `<button id="fetch-more-clickup" class="btn" onclick="Views.tickets.fetchMore('clickup')">Fetch more from ClickUp</button>` : ''
+    ].join('');
+
     const controls = `
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
-        <button id="sync-all" class="btn btn-primary" onclick="Views.tickets.syncAll()">Sync all from JIRA</button>
-        <button id="fetch-more" class="btn" onclick="Views.tickets.fetchMore()">Fetch more from JIRA</button>
+        <button id="sync-all" class="btn btn-primary" onclick="Views.tickets.syncAll()">Sync all</button>
+        ${fetchButtons}
         <span style="flex:1"></span>
         <div class="tabs" style="margin:0">
           <button class="btn ${aiOnly ? '' : 'active'}" onclick="Views.tickets.setAiOnly(false)">All</button>
@@ -61,15 +74,16 @@ window.Views.tickets = (function () {
     if (!tickets.length) {
       el.innerHTML = `<h1>Tickets</h1>${controls}
         <div class="panel empty">No tickets yet — they appear when sessions are linked, manual entries are added,
-        or you “Fetch more from JIRA”.</div>`;
+        or you fetch more from JIRA/ClickUp.</div>`;
       return;
     }
 
     const rows = shown.map(t => `
       <tr class="${statusRowClass(t.status)}">
         <td><span class="badge">${App.esc(t.key)}</span>
+            <span class="badge tracker">${App.esc(TRACKER_LABEL[t.provider] || t.provider || '')}</span>
             ${isAiTouched(t) ? `<span class="badge ai" title="AI-assisted — ${t.sessionCount || 0} session(s), ${t.manualCount || 0} manual entry(ies)">✨ AI</span>` : ''}
-            ${t.fetchFailed ? '<span class="badge dead" title="Key not found in JIRA">dead key</span>' : ''}</td>
+            ${t.fetchFailed ? `<span class="badge dead" title="Key not found in ${App.esc(TRACKER_LABEL[t.provider] || 'tracker')}">dead key</span>` : ''}</td>
         <td>${App.esc(t.summary || '')}</td>
         <td class="muted">${App.esc(t.project || '')}</td>
         <td class="muted">${App.esc(t.issueType || '')}</td>
@@ -93,8 +107,8 @@ window.Views.tickets = (function () {
         </table>
       </div>
       <div class="footnote">Showing ${shown.length} of ${tickets.length} tickets (${aiCount} AI-touched).
-        Project, sprint, and priority come from JIRA — run “Sync all from JIRA” to populate them, or
-        “Fetch more from JIRA” (JQL in Settings) to import more.</div>`;
+        Project, sprint, and priority come from your tracker — run “Sync all” to populate them, or
+        “Fetch more” (per-tracker, above) to import more.</div>`;
   }
 
   return {
@@ -106,30 +120,31 @@ window.Views.tickets = (function () {
       btn.textContent = 'Syncing…';
       try {
         const r = await Bridge.call('tickets.sync', {}, 0);
-        App.toast(`Synced ${r.synced}/${r.total} (${r.dead} dead, ${r.failed} failed)`);
+        let msg = `Synced ${r.synced}/${r.total} (${r.dead} dead, ${r.failed} failed)`;
+        if (r.skipped > 0) msg += `, ${r.skipped} skipped — tracker disabled`;
+        App.toast(msg);
         App.refresh();
       } catch (e) {
         App.toast(e.message, true);
         btn.disabled = false;
-        btn.textContent = 'Sync all from JIRA';
+        btn.textContent = 'Sync all';
       }
     },
-    async fetchMore() {
-      const btn = document.getElementById('fetch-more');
-      btn.disabled = true;
-      btn.textContent = 'Fetching…';
+    async fetchMore(provider) {
+      const label = TRACKER_LABEL[provider] || provider;
+      const btn = document.getElementById(`fetch-more-${provider}`);
+      if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
       try {
-        // no client timeout: a JQL page + upserts can take a while
-        const r = await Bridge.call('tickets.fetchMore', { nextPageToken }, 0);
-        nextPageToken = r.isLast ? null : r.nextPageToken; // null restarts from the first page
+        // no client timeout: a tracker page + upserts can take a while
+        const r = await Bridge.call('tickets.fetchMore', { provider, cursor: cursors[provider] }, 0);
+        cursors[provider] = r.isLast ? null : r.cursor; // null restarts from the first page
         App.toast(r.isLast
-          ? `Imported ${r.imported} — all matching tickets fetched`
-          : `Imported ${r.imported} — click “Fetch more” for the next page`);
+          ? `Imported ${r.imported} from ${label} — all matching tickets fetched`
+          : `Imported ${r.imported} from ${label} — click “Fetch more” for the next page`);
         App.refresh();
       } catch (e) {
         App.toast(e.message, true);
-        btn.disabled = false;
-        btn.textContent = 'Fetch more from JIRA';
+        if (btn) { btn.disabled = false; btn.textContent = `Fetch more from ${label}`; }
       }
     }
   };

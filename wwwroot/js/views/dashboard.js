@@ -134,7 +134,7 @@ window.Views.dashboard = (function () {
           <div class="footnote">Sessions with no ticket link, by project folder. Top 10 by tokens.</div></div>
         <div class="panel"><h2>Ticket type × AI activity</h2>
           <div class="chart-box"><canvas id="ch-matrix"></canvas></div>
-          <div class="footnote">Issue types appear after tickets are synced from JIRA.</div></div>
+          <div class="footnote">Issue types appear after tickets are synced from your tracker (JIRA / ClickUp).</div></div>
       </div>`}
       ${!hasExt ? '' : `
       <h2 style="margin:26px 0 0">Automation &amp; extensions</h2>
