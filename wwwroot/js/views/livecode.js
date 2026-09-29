@@ -9,10 +9,15 @@ window.Views.livecode = (function () {
   let activeTabId = null;
   let pendingFocusId = null;
 
-  // Page-global config + shared state (one JIRA ticket list shared by all tabs; plan/usage/etc.).
+  // Tracker id -> display label, for the ticket picker's provider badge.
+  const TRACKER_LABEL = { jira: 'JIRA', clickup: 'ClickUp' };
+
+  // Page-global config + shared state (one merged ticket list — JIRA + ClickUp — shared by all
+  // tabs; plan/usage/etc.).
   const G = {
     cfg: {},            // from livecode.config
-    tickets: [],        // latest 3 assigned (shared across tabs)
+    tickets: [],        // latest N assigned, merged across enabled trackers (shared across tabs)
+    ticketErrors: [],   // per-tracker fetch failures from the last livecode.tickets call
     ticketsLoaded: false,
     metricsTimer: null,
     activeTimer: null,
@@ -222,7 +227,7 @@ window.Views.livecode = (function () {
       <div class="panel lc-tickets">
         <div class="lc-section-head lc-tickets-head">
           <span>Ticket to work on <span class="muted">(latest ${G.cfg.ticketCount || 3} assigned to you)</span></span>
-          ${G.cfg.jiraConfigured ? `<button class="btn lc-refetch" id="lc-refetch-tickets" title="Re-fetch your assigned tickets from JIRA">↻ Re-fetch</button>` : ''}
+          ${G.cfg.ticketsConfigured ? `<button class="btn lc-refetch" id="lc-refetch-tickets" title="Re-fetch your assigned tickets">↻ Re-fetch</button>` : ''}
         </div>
         <div id="lc-ticket-list" class="lc-ticket-list"><span class="muted">Loading…</span></div>
       </div>
@@ -399,19 +404,22 @@ window.Views.livecode = (function () {
 
   // --- tickets / agents --------------------------------------------------------
   async function loadTickets() {
-    if (!G.cfg.jiraConfigured) { G.ticketsLoaded = true; renderTicketList(); return; }
+    if (!G.cfg.ticketsConfigured) { G.ticketsLoaded = true; renderTicketList(); return; }
     try {
       const r = await Bridge.call('livecode.tickets', {}, 0);
       G.tickets = (r && r.tickets) || [];
+      G.ticketErrors = (r && r.errors) || [];
     } catch (e) {
       G.tickets = [];
+      G.ticketErrors = [];
     }
     G.ticketsLoaded = true;
     renderTicketList();
   }
 
-  // Manual re-fetch (↻ button beside the ticket list): pull the assigned tickets from JIRA again,
-  // showing a busy state on the button. livecode.tickets always hits JIRA live (no cache).
+  // Manual re-fetch (↻ button beside the ticket list): pull the assigned tickets from every
+  // enabled tracker again, showing a busy state on the button. livecode.tickets always hits the
+  // tracker(s) live (no cache).
   async function refetchTickets() {
     const btn = document.getElementById('lc-refetch-tickets');
     if (btn) { btn.disabled = true; btn.textContent = '↻ Fetching…'; }
@@ -425,23 +433,29 @@ window.Views.livecode = (function () {
     const listEl = document.getElementById('lc-ticket-list');
     const t = activeTab();
     if (!listEl || !t) return;
-    if (!G.cfg.jiraConfigured) {
-      listEl.innerHTML = `<span class="muted">JIRA isn’t configured. Add your site, email and token in
-        <a href="#settings">Settings</a> to see assigned tickets — a ticket must be selected to start a session.</span>`;
+    if (!G.cfg.ticketsConfigured) {
+      listEl.innerHTML = `<span class="muted">No ticket tracker is configured. Enable JIRA or ClickUp in
+        <a href="#settings">Settings</a> — a ticket must be selected to start a session.</span>`;
       return;
     }
     if (!G.ticketsLoaded) { listEl.innerHTML = `<span class="muted">Loading…</span>`; return; }
+
+    const errNotice = (G.ticketErrors && G.ticketErrors.length)
+      ? `<div class="footnote">${G.ticketErrors.map(e => `${App.esc(e.provider)}: ${App.esc(e.message)}`).join(' · ')}</div>`
+      : '';
+
     if (!G.tickets.length) {
-      listEl.innerHTML = `<span class="muted">No tickets currently assigned to you.</span>`;
+      listEl.innerHTML = `<span class="muted">No tickets currently assigned to you.</span>${errNotice}`;
       return;
     }
     const sel = t.ticket ? t.ticket.key : null;
     listEl.innerHTML = G.tickets.map((tk, i) => `
       <button class="lc-ticket ${tk.key === sel ? 'selected' : ''}" data-idx="${i}">
         <span class="badge">${App.esc(tk.key)}</span>
+        <span class="badge tracker">${App.esc(TRACKER_LABEL[tk.provider] || tk.provider || '')}</span>
         <span class="lc-ticket-sum">${App.esc(tk.summary || '')}</span>
         <span class="muted lc-ticket-status">${App.esc(tk.status || '')}</span>
-      </button>`).join('');
+      </button>`).join('') + errNotice;
     listEl.querySelectorAll('.lc-ticket').forEach(b =>
       b.addEventListener('click', () => selectTicket(+b.dataset.idx)));
   }
@@ -694,29 +708,31 @@ window.Views.livecode = (function () {
     } catch { /* transient */ }
   }
 
-  // Rolling usage-limit bars (session 5h + week 7d) from livecode.usage — server-computed % + reset
-  // time, backend-cached 5 min. Silently hidden when signed out / offline (available:false).
+  // Usage-limit bars from livecode.usage — server-computed % + reset time, backend-cached 5 min.
+  // The bar set varies by subscription (rolling windows for Pro/Max/Team, a monthly spend cap for
+  // Enterprise seats with one) — render whatever bars come back, in the order given. Silently
+  // hidden when signed out / offline (available:false).
   async function pollUsage() {
     const host = document.getElementById('lc-usage');
     if (!host) return;
     try {
       const u = await Bridge.call('livecode.usage', {}, 0);
       if (!u || !u.available) { host.innerHTML = ''; return; }
-      host.innerHTML = usageRow('SESSION', u.sessionPct, u.sessionResetsAt)
-                     + usageRow('WEEK', u.weekPct, u.weekResetsAt);
+      host.innerHTML = (u.bars || []).map(b => usageRow(b.label, b.pct, b.resetsAt, b.detail)).join('');
     } catch { /* transient — keep last render */ }
   }
 
-  // One usage bar row: clamped fill + threshold color (≥95% crit, ≥80% warn) + "N% · resets …".
-  function usageRow(label, pct, resetsAt) {
+  // One usage bar row: clamped fill + threshold color (≥95% crit, ≥80% warn) + "N% · resets … · detail".
+  function usageRow(label, pct, resetsAt, detail) {
     if (pct == null) return '';
     const c = Math.max(0, Math.min(100, Number(pct) || 0));
     const cls = c >= 95 ? ' crit' : c >= 80 ? ' warn' : '';
     const reset = resetsAt ? ` · resets ${App.esc(fmtReset(resetsAt))}` : '';
+    const det = detail ? ` · ${App.esc(detail)}` : '';
     return `<div class="lc-usage-row">
       <span class="lc-usage-label">${App.esc(label)}</span>
       <div class="lc-bar-track"><div class="lc-bar-fill${cls}" style="width:${c}%"></div></div>
-      <span class="lc-usage-pct">${Math.round(c)}%${reset}</span>
+      <span class="lc-usage-pct">${Math.round(c)}%${reset}${det}</span>
     </div>`;
   }
 

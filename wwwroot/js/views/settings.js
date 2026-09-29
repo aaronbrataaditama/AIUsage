@@ -1,5 +1,10 @@
 window.Views = window.Views || {};
 window.Views.settings = (function () {
+  // Last clickup.test() result's workspaces, kept across a refresh() re-render so the Workspace
+  // field can render a <select> instead of a bare id input. Null until the user tests a connection
+  // this session (module-closure state, same pattern as tickets.js's fetch cursor).
+  let cuWorkspaces = null;
+
   async function load(el) {
     let s;
     try {
@@ -12,6 +17,7 @@ window.Views.settings = (function () {
     el.innerHTML = `<h1>Settings</h1>
       <div class="panel form-narrow">
         <h2>JIRA (read-only)</h2>
+        <label class="lc-check"><input type="checkbox" id="set-jira-enabled" ${s.jiraEnabled ? 'checked' : ''}> Enabled</label>
         ${s.jiraSiteUrlInsecure ? `<div class="lc-warn" style="border:1px solid #f0c98a;border-radius:6px;padding:8px 10px;margin-bottom:12px;align-items:flex-start">⚠ The saved site URL is not an
           <strong>https://</strong> address, so JIRA is disabled — your email and API token would otherwise be sent
           in cleartext on every request. Enter an https:// URL and save.</div>` : ''}
@@ -33,17 +39,39 @@ window.Views.settings = (function () {
       </div>
 
       <div class="panel form-narrow">
+        <h2>ClickUp (read-only)</h2>
+        <label class="lc-check"><input type="checkbox" id="set-cu-enabled" ${s.clickupEnabled ? 'checked' : ''}> Enabled</label>
+        <label>API token ${s.clickupTokenSet ? '<span class="badge confirmed">set</span>' : '<span class="badge dead">not set</span>'}</label>
+        <input id="set-cu-token" type="password" placeholder="${s.clickupTokenSet ? 'leave empty to keep current token' : 'paste a ClickUp personal API token (pk_…)'}">
+        <div class="footnote">Stored DPAPI-encrypted for your Windows user. Create one under ClickUp → Settings → Apps.</div>
+        <label>Workspace</label>
+        ${cuWorkspaces && cuWorkspaces.length
+          ? `<select id="set-cu-team">${
+              cuWorkspaces.length > 1 && !s.clickupTeamId ? '<option value="">— pick a workspace —</option>' : ''
+            }${cuWorkspaces.map(w =>
+              `<option value="${App.esc(w.id)}" ${w.id === s.clickupTeamId ? 'selected' : ''}>${App.esc(w.name)}</option>`).join('')}</select>`
+          : `<input id="set-cu-team" placeholder="numeric workspace id (Test connection to list them)" value="${App.esc(s.clickupTeamId)}">`}
+        <label>Custom Task ID prefixes</label>
+        <input id="set-cu-prefixes" placeholder="e.g. DEV,OPS — leave empty if you don't use Custom Task IDs" value="${App.esc(s.clickupCustomIdPrefixes)}" style="text-transform:uppercase">
+        <div style="margin-top:12px; display:flex; gap:8px">
+          <button class="btn btn-primary" onclick="Views.settings.save()">Save</button>
+          <button class="btn" onclick="Views.settings.testClickUp()">Test connection</button>
+        </div>
+      </div>
+
+      <div class="panel form-narrow">
         <h2>Scanner</h2>
         <label>Scan paths (semicolon-separated; empty = default)</label>
         <input id="set-paths" placeholder="${App.esc(s.defaultScanPath)}" value="${App.esc(s.scanPaths)}">
-        <label>Project key allowlist (comma-separated, e.g. SFTY,QS — filters inferred ticket keys)</label>
+        <label>Project key allowlist (comma-separated, e.g. SFTY,QS — filters inferred JIRA ticket keys)</label>
         <input id="set-allowlist" placeholder="empty = allow all keys" value="${App.esc(s.projectKeyAllowlist)}" style="text-transform:uppercase">
         <label>Backfill from (ignore transcript files older than this date)</label>
         <input id="set-backfill" type="date" value="${App.esc(s.backfillFrom)}">
         <div style="margin-top:12px">
           <button class="btn btn-primary" onclick="Views.settings.save()">Save</button>
         </div>
-        <div class="footnote">Changing the allowlist removes auto-inferred links that no longer match (manually assigned and confirmed links are kept).</div>
+        <div class="footnote">Changing the allowlist removes auto-inferred links that no longer match (manually assigned and confirmed links are kept).
+          ClickUp native <strong>CU-…</strong> keys are always allowed; your Custom Task ID prefixes above are added to the allowlist automatically.</div>
       </div>
 
       <div class="panel form-narrow">
@@ -61,10 +89,15 @@ window.Views.settings = (function () {
     render: load,
     async save() {
       const payload = {
+        jiraEnabled: document.getElementById('set-jira-enabled').checked,
         jiraSiteUrl: document.getElementById('set-site').value.trim(),
         jiraEmail: document.getElementById('set-email').value.trim(),
         jiraToken: document.getElementById('set-token').value,
         jiraFetchJql: document.getElementById('set-fetch-jql').value.trim(),
+        clickupEnabled: document.getElementById('set-cu-enabled').checked,
+        clickupToken: document.getElementById('set-cu-token').value,
+        clickupTeamId: document.getElementById('set-cu-team').value.trim(),
+        clickupCustomIdPrefixes: document.getElementById('set-cu-prefixes').value.trim().toUpperCase(),
         scanPaths: document.getElementById('set-paths').value.trim(),
         projectKeyAllowlist: document.getElementById('set-allowlist').value.trim().toUpperCase(),
         backfillFrom: document.getElementById('set-backfill').value,
@@ -84,6 +117,16 @@ window.Views.settings = (function () {
       try {
         const r = await Bridge.call('jira.test');
         App.toast(`Connected to JIRA as ${r.user}`);
+      } catch (e) {
+        App.toast(e.message, true);
+      }
+    },
+    async testClickUp() {
+      try {
+        const r = await Bridge.call('clickup.test');
+        cuWorkspaces = r.workspaces || [];
+        App.toast(`Connected to ClickUp as ${r.user}`);
+        App.refresh();
       } catch (e) {
         App.toast(e.message, true);
       }

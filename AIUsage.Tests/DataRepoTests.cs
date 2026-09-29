@@ -1,5 +1,7 @@
+using System.Linq;
 using AIUsage.Data.Repositories;
 using AIUsage.Tests.Helpers;
+using AIUsage.Tickets;
 
 namespace AIUsage.Tests;
 
@@ -7,12 +9,27 @@ namespace AIUsage.Tests;
 public class DataRepoTests
 {
     [Fact]
+    public void Upsert_stores_provider_and_keeps_description_on_search_upsert()
+    {
+        using var db = new TestDb();
+        TicketRepo.Upsert(db.Conn, new TicketInfo("CU-86b1abcde", TicketProviderIds.ClickUp, "Fix login",
+            "in progress", "Task", "Web", null, "high", "2026-09-01T00:00:00Z", Description: "full text"));
+        TicketRepo.Upsert(db.Conn, new TicketInfo("CU-86b1abcde", TicketProviderIds.ClickUp, "Fix login v2",
+            "review", "Task", "Web", null, "high", "2026-09-02T00:00:00Z"));   // search result: no description
+
+        var row = TicketRepo.List(db.Conn).Single(r => (string)r["key"]! == "CU-86b1abcde");
+        Assert.Equal("clickup", row["provider"]);
+        Assert.Equal("Fix login v2", row["summary"]);
+        Assert.Equal("full text", db.Scalar<string>("SELECT description FROM Tickets WHERE key='CU-86b1abcde'"));
+    }
+
+    [Fact]
     public void TicketRepo_upsert_then_list_round_trips()
     {
         using var db = new TestDb();
 
-        TicketRepo.UpsertFetched(db.Conn, "ABC-1", "Fix the thing", "In Progress",
-            "Bug", "ABC", "Sprint 3", "High", "2026-07-01T00:00:00Z");
+        TicketRepo.Upsert(db.Conn, new TicketInfo("ABC-1", TicketProviderIds.Jira, "Fix the thing", "In Progress",
+            "Bug", "ABC", "Sprint 3", "High", "2026-07-01T00:00:00Z"));
 
         Assert.Contains("ABC-1", TicketRepo.AllKeys(db.Conn));
         var rows = TicketRepo.List(db.Conn);
@@ -24,8 +41,8 @@ public class DataRepoTests
     {
         using var db = new TestDb();
 
-        TicketRepo.UpsertFetched(db.Conn, "ABC-1", "First", "Open", "Task", "ABC", null, "Low", null);
-        TicketRepo.UpsertFetched(db.Conn, "ABC-1", "Second", "Done", "Task", "ABC", null, "Low", null);
+        TicketRepo.Upsert(db.Conn, new TicketInfo("ABC-1", TicketProviderIds.Jira, "First", "Open", "Task", "ABC", null, "Low", null));
+        TicketRepo.Upsert(db.Conn, new TicketInfo("ABC-1", TicketProviderIds.Jira, "Second", "Done", "Task", "ABC", null, "Low", null));
 
         Assert.Equal("Second", db.Scalar<string>("SELECT summary FROM Tickets WHERE key='ABC-1'"));
         Assert.Equal(1L, db.Scalar<long>("SELECT COUNT(*) FROM Tickets WHERE key='ABC-1'"));

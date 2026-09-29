@@ -9,7 +9,15 @@ public class MigrationsTests
     public void Run_stamps_the_current_schema_version()
     {
         using var db = new TestDb();
-        Assert.Equal(7, db.Scalar<int>("SELECT version FROM SchemaVersion"));
+        Assert.Equal(8, db.Scalar<int>("SELECT version FROM SchemaVersion"));
+    }
+
+    [Fact]
+    public void Run_adds_the_tickets_provider_column()
+    {
+        using var db = new TestDb();
+        Assert.Equal(1, db.Scalar<long>(
+            "SELECT COUNT(*) FROM pragma_table_info('Tickets') WHERE name='provider'"));
     }
 
     [Theory]
@@ -49,7 +57,7 @@ public class MigrationsTests
         Migrations.Run(db.Conn);
         Migrations.Run(db.Conn);
 
-        Assert.Equal(7, db.Scalar<int>("SELECT version FROM SchemaVersion"));
+        Assert.Equal(8, db.Scalar<int>("SELECT version FROM SchemaVersion"));
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM SchemaVersion"));
         Assert.Equal(7, db.Scalar<long>("SELECT COUNT(*) FROM ActivityCategories"));
     }
@@ -83,5 +91,19 @@ public class MigrationsTests
 
         Assert.Equal("1", db.Scalar<string>(
             "SELECT value FROM Settings WHERE key='dailytokens_backfill_pending'"));
+    }
+
+    [Fact]
+    public void Run_backfills_jira_provider_for_previously_synced_tickets_on_upgrade()
+    {
+        using var db = new TestDb();
+        db.Exec("INSERT INTO Tickets(key, last_synced) VALUES ('ABC-1', '2026-07-01T00:00:00Z')");
+        db.Exec("INSERT INTO Tickets(key, last_synced) VALUES ('ABC-2', NULL)");   // never fetched
+        db.Exec("UPDATE SchemaVersion SET version = 7");   // pretend this DB predates v8
+
+        Migrations.Run(db.Conn);
+
+        Assert.Equal("jira", db.Scalar<string>("SELECT provider FROM Tickets WHERE key='ABC-1'"));
+        Assert.Null(db.Scalar<string>("SELECT provider FROM Tickets WHERE key='ABC-2'"));
     }
 }

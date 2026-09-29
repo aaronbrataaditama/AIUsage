@@ -13,7 +13,7 @@
          "+<hash>" onto AssemblyInformationalVersion (SourceRevisionId is an SDK-recognized
          property, wired up by AddSourceRevisionToInformationalVersion in
          Microsoft.NET.GenerateAssemblyInfo.targets — no SourceLink package needed). -->
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 
   <!-- Stamps the git short commit hash (if available) and UTC build date, both best-effort:
@@ -56,6 +56,10 @@
     <Compile Remove="AIUsage.Tests\**\*.cs" />
     <EmbeddedResource Remove="AIUsage.Tests\**" />
     <None Remove="AIUsage.Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AIUsage.Tests" />
   </ItemGroup>
 
   <ItemGroup>

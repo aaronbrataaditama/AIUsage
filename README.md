@@ -1,8 +1,8 @@
 # AI Usage Tracker
 
-A single-user, **local-only** desktop app that tracks which JIRA tickets you worked on with AI
+A single-user, **local-only** desktop app that tracks which tickets you worked on with AI
 assistance — how much, and what the AI actually did. It scans your Claude Code session
-transcripts (and accepts manual entries), infers ticket keys, enriches them from JIRA
+transcripts (and accepts manual entries), infers ticket keys, enriches them from JIRA or ClickUp
 (read-only), and visualizes the relationships with charts.
 
 No server, no team sync, no Electron, no cloud. Everything stays on your machine in a local
@@ -15,8 +15,9 @@ SQLite file.
 ## What it does
 
 - **Scans Claude Code transcripts** (`%USERPROFILE%\.claude\projects\**\*.jsonl`) incrementally and
-  infers the JIRA ticket each session worked on (from the git branch → working directory → prompt
-  text, filtered by a project-key allowlist).
+  infers the ticket each session worked on (from the git branch → working directory → prompt
+  text, filtered by a project-key allowlist; ClickUp's native `CU-<id>` form is recognized too, when
+  ClickUp is enabled).
 - **Dashboard** — token usage per week, AI-assisted tickets per week, a breakdown of *what* the AI
   did (edit/write/read/shell/other), Claude model usage over time, top tickets, and ticket-type ×
   activity — plus **Automation & extensions** charts (sub-agents, skills, MCP servers, and hooks
@@ -26,12 +27,13 @@ SQLite file.
   tool-call counts, an agent / active / idle time split, token cost, and the agents, skills, MCP
   tools, and hooks that session used.
 - **Manual entry** — log AI-assisted work that wasn't captured automatically.
-- **Tickets** — a JIRA-enriched ticket list (status, type, project, sprint, priority, last
-  updated), with status colouring, an "AI-touched" filter, and on-demand import of more tickets
-  from JIRA.
+- **Tickets** — a JIRA- and/or ClickUp-enriched ticket list (status, type, project, sprint,
+  priority, last updated, and which tracker it came from), with status colouring, an "AI-touched"
+  filter, and on-demand import of more tickets from either tracker.
 - **Export to Excel** — one-click `.xlsx` export of Sessions, Manual entries, and Tickets.
-- **Read-only JIRA integration** — enrich ticket keys with summary/status/type/etc. The app never
-  writes to JIRA.
+- **Read-only JIRA and/or ClickUp integration** — enrich ticket keys with summary/status/type/etc.
+  The app never writes to either tracker. Both are optional and independently toggled; a ClickUp
+  key (native `CU-<id>`, or a configured Custom Task ID prefix) and a JIRA key can coexist.
 - **Live Code** — drive interactive Claude Code sessions right inside the app, kicked off from a
   selected ticket (see below).
 
@@ -42,9 +44,11 @@ SQLite file.
 - **Local-first.** All data lives in a portable `aiusage.db` (SQLite) next to the executable,
   falling back to `%APPDATA%\AIUsage\` only when the install directory isn't writable. It is
   git-ignored and never leaves your machine.
-- **JIRA token** is stored **DPAPI-encrypted** for your Windows user (write-only in the UI) and does
-  not survive copying the folder to another machine or user — by design it degrades to "not set".
-- **JIRA access is read-only.**
+- **JIRA and ClickUp tokens** are stored **DPAPI-encrypted** for your Windows user (write-only in
+  the UI) and do not survive copying the folder to another machine or user — by design they
+  degrade to "not set".
+- **JIRA and ClickUp access are both read-only.** ClickUp's API host is a fixed constant (not a
+  user-editable URL), so its token can never be sent anywhere else.
 - Headline token figures exclude cache-read tokens.
 
 ---
@@ -53,7 +57,8 @@ SQLite file.
 
 The **Live Code** page runs interactive Claude Code sessions inside the app, under your Claude
 **subscription** auth (`ANTHROPIC_API_KEY` is stripped so you're never billed for metered API
-usage), started from a selected JIRA ticket. Starting a session auto-links the ticket to the work.
+usage), started from a selected JIRA or ClickUp ticket (a merged, most-recently-updated picker
+across whichever tracker(s) you've enabled). Starting a session auto-links the ticket to the work.
 
 - **A real terminal** — the chosen shell (PowerShell or Git Bash) is hosted in a Windows
   pseudo-console (ConPTY) and streamed to an embedded [xterm.js](https://xtermjs.org/) terminal;
@@ -71,8 +76,10 @@ usage), started from a selected JIRA ticket. Starting a session auto-links the t
 - **Resume Sessions** — browse the existing Claude Code sessions for a folder (labelled by their
   first prompt) and resume any one of them.
 - **Metrics** — per-session tokens (with cache shown separately) and context-window usage
-  (used-of-max), plus your plan, weekly tokens, rolling **usage-limit bars** (5-hour session &
-  7-day week windows, from Claude's own `/usage` data), and the top active Claude Code sessions.
+  (used-of-max), plus your plan, weekly tokens, rolling **usage-limit bars** (whichever windows your
+  subscription actually has — 5-hour/7-day/per-model rolling windows, or a monthly spend cap for a
+  spend-capped Enterprise seat — from Claude's own `/usage` data), and the top active Claude Code
+  sessions.
 
 > Live Code is **Windows-only** (it relies on ConPTY) and requires the
 > [Claude Code CLI](https://claude.ai/code) to be installed and on `PATH`.
@@ -92,14 +99,18 @@ dotnet build        # build only
 ```
 
 On first launch, open **Settings** and add your JIRA site URL, email, and an API token
-(create one at id.atlassian.com → Security → API tokens) to enable ticket enrichment.
+(create one at id.atlassian.com → Security → API tokens) and/or your ClickUp personal API token
+(create one at ClickUp → Settings → Apps) to enable ticket enrichment. Both trackers are optional
+and independently toggled.
 
 ### Headless / diagnostic commands
 ```bash
 dotnet run -- --scan                 # run the transcript scanner, print counts
 dotnet run -- --sql "SELECT ..."     # read-only query (PRAGMA query_only=ON enforced)
-dotnet run -- --set <key> <value>    # write a Settings row (use jira_token for the DPAPI secret)
+dotnet run -- --set <key> <value>    # write a Settings row (use jira_token / clickup_token for the DPAPI secrets)
 dotnet run -- --route <page>         # open directly on a page (dashboard|sessions|manual|tickets|livecode|settings)
+dotnet run -- --usagetest            # print the Live Code usage-limit bars
+dotnet run -- --clickuptest <key>    # fetch one ClickUp task by key and print it
 ```
 
 ### Build a single-file, self-contained executable
@@ -130,7 +141,9 @@ two halves talk over Photino's string message bus as JSON.
 - **Frontend** (`wwwroot/`) — classic scripts + globals (no ES modules — they don't load over
   `file://` in WebView2); a hashchange router with one self-registering module per page. Chart.js
   is vendored locally (no CDN).
-- **JIRA** (`Jira/`) — read-only JIRA Cloud REST; DPAPI-protected token.
+- **Ticket trackers** (`Tickets/`, `Jira/`, `ClickUp/`) — read-only JIRA Cloud REST and/or ClickUp
+  REST v2 behind one `ITicketProvider` abstraction that routes a key to the tracker that owns it;
+  DPAPI-protected tokens for both.
 - **Live Code** (`Terminal/`, `Bridge/Handlers/LiveCodeHandlers.cs`) — hosts shells in a
   pseudo-console (ConPTY via Porta.Pty), streams output to xterm.js over an event channel, and
   manages per-tab sessions, git-worktree isolation, and session resume.

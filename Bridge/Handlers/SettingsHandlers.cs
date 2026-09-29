@@ -1,11 +1,22 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using AIUsage.Data;
 using AIUsage.Jira;
 using AIUsage.Settings;
+using Microsoft.Data.Sqlite;
 
 namespace AIUsage.Bridge.Handlers;
 
-public static class SettingsHandlers
+public static partial class SettingsHandlers
 {
+    // ClickUp Custom Task ID prefixes, e.g. "DEV" — same shape as a JIRA project key, so reuse
+    // the pattern rather than re-derive it.
+    [GeneratedRegex(@"^[A-Z][A-Z0-9]{1,9}$")]
+    private static partial Regex PrefixPattern();
+
+    [GeneratedRegex(@"^\d{1,20}$")]
+    private static partial Regex TeamIdPattern();
+
     public static void Register(MessageRouter router)
     {
         // Synchronous handlers return Task.FromResult (no Task.Run) — see the note in
@@ -20,12 +31,17 @@ public static class SettingsHandlers
                                   && !JiraSiteUrl.IsSecure(SettingsStore.Get("jira_site_url")),
             jiraEmail = SettingsStore.Get("jira_email") ?? "",
             jiraTokenSet = SettingsStore.GetProtected("jira_token") is not null,
+            jiraEnabled = SettingsStore.JiraEnabled(),
             scanPaths = SettingsStore.Get("scan_paths") ?? "",
             defaultScanPath = SettingsStore.ScanRoots()[0],
             projectKeyAllowlist = SettingsStore.Get("project_key_allowlist") ?? "",
             backfillFrom = SettingsStore.Get("backfill_from") ?? "",
-            jiraFetchJql = SettingsStore.Get("jira_fetch_jql") ?? JiraHandlers.DefaultFetchJql,
-            livecodeTicketCount = SettingsStore.Get("livecode_ticket_count") ?? "3"
+            jiraFetchJql = SettingsStore.Get("jira_fetch_jql") ?? TicketHandlers.DefaultFetchJql,
+            livecodeTicketCount = SettingsStore.Get("livecode_ticket_count") ?? "3",
+            clickupEnabled = SettingsStore.ClickUpEnabled(),
+            clickupTokenSet = SettingsStore.GetProtected("clickup_token") is not null,
+            clickupTeamId = SettingsStore.Get("clickup_team_id") ?? "",
+            clickupCustomIdPrefixes = SettingsStore.Get("clickup_custom_id_prefixes") ?? ""
         }));
 
         router.Register("settings.set", payload =>
@@ -35,6 +51,7 @@ public static class SettingsHandlers
             // message); an empty value clears the setting. If the host changes, the stored token is
             // dropped — it belongs to the old host and must not be replayable to a new one.
             var tokenCleared = false;
+            var purgeNeeded = false;
             var siteRaw = SessionHandlers.GetString(payload, "jiraSiteUrl");
             if (siteRaw is not null)
             {
@@ -75,8 +92,44 @@ public static class SettingsHandlers
                 var before = SettingsStore.Get("project_key_allowlist") ?? "";
                 SettingsStore.Set("project_key_allowlist", newAllowlist.Trim());
                 if (!string.Equals(before.Trim(), newAllowlist.Trim(), StringComparison.OrdinalIgnoreCase))
-                    PurgeDisallowedAutoLinks();
+                    purgeNeeded = true;
             }
+
+            if (TryGetBool(payload, "jiraEnabled", out var jiraEnabled))
+                SettingsStore.Set("jira_enabled", jiraEnabled ? "1" : "0");
+
+            // Toggling clickupEnabled alone does NOT purge: it doesn't change which keys are
+            // allowed (that's the prefix/allowlist settings below), and the scanner can't
+            // re-infer a DEV-… auto-link once it's gone — only an actual prefix/allowlist change
+            // should trigger the purge.
+            if (TryGetBool(payload, "clickupEnabled", out var clickupEnabled))
+                SettingsStore.Set("clickup_enabled", clickupEnabled ? "1" : "0");
+
+            // ClickUp token is write-only, same as the JIRA one: only overwrite on a new non-empty value.
+            var clickupToken = SessionHandlers.GetString(payload, "clickupToken");
+            if (!string.IsNullOrWhiteSpace(clickupToken))
+                SettingsStore.SetProtected("clickup_token", clickupToken.Trim());
+
+            var clickupTeamId = SessionHandlers.GetString(payload, "clickupTeamId");
+            if (clickupTeamId is not null)
+            {
+                var trimmed = clickupTeamId.Trim();
+                if (trimmed.Length > 0 && !TeamIdPattern().IsMatch(trimmed))
+                    throw new ArgumentException($"'{trimmed}' is not a valid ClickUp workspace id (expected digits only)");
+                SettingsStore.Set("clickup_team_id", trimmed);
+            }
+
+            var prefixesRaw = SessionHandlers.GetString(payload, "clickupCustomIdPrefixes");
+            if (prefixesRaw is not null)
+            {
+                var before = SettingsStore.Get("clickup_custom_id_prefixes") ?? "";
+                var parsed = ParsePrefixes(prefixesRaw);
+                SettingsStore.Set("clickup_custom_id_prefixes", parsed);
+                if (!string.Equals(before, parsed, StringComparison.Ordinal))
+                    purgeNeeded = true;
+            }
+
+            if (purgeNeeded) PurgeDisallowedAutoLinks();
             return Task.FromResult<object?>(new { tokenCleared });
         });
     }
@@ -88,6 +141,33 @@ public static class SettingsHandlers
             SettingsStore.Set(settingKey, value.Trim());
     }
 
+    private static bool TryGetBool(JsonElement payload, string name, out bool value)
+    {
+        value = false;
+        if (payload.ValueKind != JsonValueKind.Object || !payload.TryGetProperty(name, out var p))
+            return false;
+        switch (p.ValueKind)
+        {
+            case JsonValueKind.True: value = true; return true;
+            case JsonValueKind.False: value = false; return true;
+            default: return false;
+        }
+    }
+
+    /// <summary>Normalizes a comma-separated list of ClickUp Custom Task ID prefixes (e.g.
+    /// "dev, ops" -&gt; "DEV,OPS"), throwing a readable message for anything that isn't a bare
+    /// project-key-shaped token.</summary>
+    internal static string ParsePrefixes(string raw)
+    {
+        var prefixes = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(p => p.ToUpperInvariant())
+            .ToList();
+        foreach (var p in prefixes)
+            if (!PrefixPattern().IsMatch(p))
+                throw new ArgumentException($"'{p}' is not a valid ClickUp Custom ID prefix (expected e.g. DEV)");
+        return string.Join(",", prefixes);
+    }
+
     /// <summary>
     /// After the allowlist changes, drop auto-inferred links whose project key no longer
     /// matches (manual and confirmed links are user statements — never touched), demote
@@ -96,10 +176,21 @@ public static class SettingsHandlers
     /// </summary>
     public static void PurgeDisallowedAutoLinks()
     {
-        var allowed = SettingsStore.ProjectKeyAllowlist();
+        var allowed = SettingsStore.EffectiveKeyAllowlist();
         if (allowed.Count == 0) return; // empty allowlist = allow everything
 
         using var conn = Db.Open();
+        PurgeDisallowedAutoLinks(conn, allowed);
+    }
+
+    /// <summary>
+    /// The purge itself, against an explicit connection. Native ClickUp links (CU-&lt;id&gt;) have no
+    /// project part, so the allowlist never applies to them and they are always kept.
+    /// </summary>
+    internal static void PurgeDisallowedAutoLinks(SqliteConnection conn, HashSet<string> allowed)
+    {
+        if (allowed.Count == 0) return; // empty allowlist = allow everything
+
         using var tx = conn.BeginTransaction();
 
         var placeholders = string.Join(",", allowed.Select((_, i) => $"$p{i}"));
@@ -108,6 +199,7 @@ public static class SettingsHandlers
             cmd.CommandText = $"""
                 DELETE FROM SessionTicketLinks
                 WHERE source = 'auto'
+                  AND ticket_key NOT GLOB '{TicketKey.ClickUpNativeGlob}'
                   AND substr(ticket_key, 1, instr(ticket_key, '-') - 1) NOT IN ({placeholders});
 
                 UPDATE Sessions SET review_state = 'pending'

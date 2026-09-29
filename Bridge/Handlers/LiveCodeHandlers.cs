@@ -1,12 +1,13 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using AIUsage.Data;
 using AIUsage.Data.Repositories;
-using AIUsage.Jira;
 using AIUsage.Platform;
 using AIUsage.Scanner;
 using AIUsage.Settings;
 using AIUsage.Terminal;
+using AIUsage.Tickets;
 using Photino.NET;
 
 namespace AIUsage.Bridge.Handlers;
@@ -21,17 +22,44 @@ namespace AIUsage.Bridge.Handlers;
 /// </summary>
 public static class LiveCodeHandlers
 {
-    /// <summary>Latest tickets assigned to the current user (independent of the user's Fetch JQL).</summary>
-    private const string AssignedJql = "assignee = currentUser() ORDER BY updated DESC";
-
-    /// <summary>Finished statuses hidden from the "tickets to work on" picker (case-insensitive).</summary>
-    private static readonly HashSet<string> ExcludedTicketStatuses =
-        new(StringComparer.OrdinalIgnoreCase) { "Closed", "Done", "Ready for Release" };
-
     /// <summary>How many assigned tickets the Live Code picker lists (setting
     /// <c>livecode_ticket_count</c>; default 3, clamped 1..20).</summary>
     private static int TicketCount() =>
         int.TryParse(SettingsStore.Get("livecode_ticket_count"), out var n) ? Math.Clamp(n, 1, 20) : 3;
+
+    /// <summary>One provider's assigned-items fetch for the merged picker, with its own failure
+    /// captured rather than thrown — so one tracker erroring doesn't blank the other's tickets. The
+    /// exception's Message is the client's own readable text (never a token).</summary>
+    private static async Task<(List<TicketInfo> Tickets, string? ProviderName, string? ErrorMessage)>
+        FetchAssignedAsync(ITicketProvider provider, int max)
+    {
+        try { return (await provider.AssignedAsync(max), null, null); }
+        catch (Exception ex) { return (new List<TicketInfo>(), provider.DisplayName, ex.Message); }
+    }
+
+    /// <summary>Parse a tracker's <c>Updated</c> string to a comparable instant. JIRA emits an offset
+    /// with no colon (e.g. "+0530"); ClickUp emits UTC "o" format ("…Z") — <see cref="DateTimeOffset.TryParse"/>
+    /// handles both, so ordinal string comparison (which does NOT reflect chronological order across
+    /// differing offsets) must never be used to merge the two trackers' lists. Null/unparseable sorts
+    /// last (via <see cref="DateTimeOffset.MinValue"/>, the smallest possible instant).</summary>
+    internal static DateTimeOffset? ParseUpdated(string? updated) =>
+        !string.IsNullOrWhiteSpace(updated) &&
+        DateTimeOffset.TryParse(updated, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dto)
+            ? dto : null;
+
+    /// <summary>Merge-sort helper for the Live Code ticket picker: newest first by the parsed instant,
+    /// not the raw string (see <see cref="ParseUpdated"/>). Extracted so it's unit-testable in
+    /// isolation from the bridge handler.</summary>
+    internal static IEnumerable<TicketInfo> OrderByUpdatedDesc(IEnumerable<TicketInfo> tickets) =>
+        tickets.OrderByDescending(t => ParseUpdated(t.Updated) ?? DateTimeOffset.MinValue);
+
+    /// <summary>Merge multiple providers' assigned-ticket lists for the Live Code picker: drop
+    /// finished tickets first (a done ticket must never occupy a picker slot, even if it's the
+    /// most recently updated one — dropping it AFTER <c>Take(count)</c> would just shrink the
+    /// list instead of surfacing the next open ticket), then rank newest-first and take the
+    /// configured count. Extracted so it's unit-testable without a network call.</summary>
+    internal static List<TicketInfo> MergeForPicker(IEnumerable<TicketInfo> tickets, int count) =>
+        OrderByUpdatedDesc(tickets.Where(t => !t.IsDone)).Take(count).ToList();
 
     /// <summary>One <see cref="ConPtySession"/> per tab plus the metadata needed to locate its
     /// transcript and to Resume it after Stop. Mutated only under <see cref="Gate"/> because the
@@ -78,9 +106,11 @@ public static class LiveCodeHandlers
         router.Register("livecode.config", _ =>
         {
             var account = ClaudeAccount.Read();
+            var providers = TicketProviders.Enabled();
             return Task.FromResult<object?>(new
             {
-                jiraConfigured = JiraClient.FromSettings() is not null,
+                ticketsConfigured = providers.Count > 0,
+                ticketProviders = providers.Select(p => p.DisplayName).ToList(),
                 ticketCount = TicketCount(),
                 lastFolder = SettingsStore.Get("livecode_last_folder") ?? "",
                 lastShell = SettingsStore.Get("livecode_last_shell") ?? "powershell",
@@ -112,28 +142,33 @@ public static class LiveCodeHandlers
 
         router.Register("livecode.tickets", async _ =>
         {
-            var client = JiraClient.FromSettings();
-            if (client is null)
-                return new { configured = false, tickets = Array.Empty<object>() };
+            var providers = TicketProviders.Enabled();
+            if (providers.Count == 0)
+                return new { configured = false, tickets = Array.Empty<object>(), errors = Array.Empty<object>() };
 
-            // Fetch a larger page (newest first) then drop finished tickets by status name and take the
-            // configured count. Filtering client-side (vs JQL) avoids errors if a status name doesn't
-            // exist in this instance; the page is oversized so filtering still leaves enough to take.
+            // Query every enabled tracker concurrently, oversized (newest first) so the merged list
+            // still has enough left after taking the configured count. One tracker failing doesn't
+            // blank the other — its failure is reported in `errors` instead.
             var count = TicketCount();
-            var page = await client.SearchIssuesAsync(AssignedJql, nextPageToken: null,
-                maxResults: Math.Clamp(count * 3, 25, 60));
-            var tickets = page.Issues
-                .Where(i => i.Status is null || !ExcludedTicketStatuses.Contains(i.Status.Trim()))
-                .Take(count)
-                .Select(i => new
+            var max = Math.Clamp(count * 3, 25, 60);
+            var results = await Task.WhenAll(providers.Select(p => FetchAssignedAsync(p, max)));
+
+            var tickets = MergeForPicker(results.SelectMany(r => r.Tickets), count)
+                .Select(t => new
                 {
-                    key = i.Key,
-                    summary = i.Summary,
-                    status = i.Status,
-                    issueType = i.IssueType,
-                    priority = i.Priority
+                    key = t.Key,
+                    summary = t.Summary,
+                    status = t.Status,
+                    issueType = t.IssueType,
+                    priority = t.Priority,
+                    provider = t.Provider,
+                    updated = t.Updated
                 }).ToList();
-            return new { configured = true, tickets };
+            var errors = results
+                .Where(r => r.ErrorMessage is not null)
+                .Select(r => new { provider = r.ProviderName, message = r.ErrorMessage })
+                .ToList();
+            return new { configured = true, tickets, errors };
         });
 
         router.Register("livecode.listAgents", payload =>
@@ -374,9 +409,11 @@ public static class LiveCodeHandlers
             return Task.FromResult<object?>(new { activeSessions = list });
         });
 
-        // Rolling usage-limit bars (session 5h + week 7d) from Anthropic's oauth/usage endpoint —
-        // server-computed percentages, cached 5 min in ClaudeUsage so polling is cheap. Best-effort:
-        // returns available:false when signed out / offline so the page just hides the bars.
+        // Usage-limit bars from Anthropic's oauth/usage endpoint — server-computed percentages,
+        // cached 5 min in ClaudeUsage so polling is cheap. The bar set varies by subscription
+        // (rolling 5h/7d/per-model windows for Pro/Max/Team, a monthly spend cap for Enterprise
+        // seats with one). Best-effort: returns available:false when signed out / offline so the
+        // page just hides the bars.
         router.Register("livecode.usage", async _ =>
         {
             var u = await ClaudeUsage.ReadAsync();
@@ -384,10 +421,8 @@ public static class LiveCodeHandlers
             return new
             {
                 available = true,
-                sessionPct = u.SessionPct,
-                sessionResetsAt = u.SessionResetsAt?.ToString("o"),
-                weekPct = u.WeekPct,
-                weekResetsAt = u.WeekResetsAt?.ToString("o")
+                bars = u.Bars.Select(b => new
+                    { id = b.Id, label = b.Label, pct = b.Pct, resetsAt = b.ResetsAt?.ToString("o"), detail = b.Detail })
             };
         });
 
@@ -565,28 +600,32 @@ public static class LiveCodeHandlers
         {
             try
             {
-                var client = JiraClient.FromSettings();
-                if (client is not null)
+                var provider = TicketProviders.For(ticketKey);
+                if (provider is not null)
                 {
-                    var iss = await client.FetchIssueAsync(ticketKey);
-                    if (iss is not null)
+                    var info = await provider.FetchAsync(ticketKey);
+                    if (info is not null)
                     {
-                        ticketSummary ??= iss.Summary;
-                        description = iss.Description;
+                        ticketSummary ??= info.Summary;
+                        description = info.Description;
                         using var c = Db.Open();
-                        TicketRepo.UpsertFetched(c, iss.Key, iss.Summary, iss.Status, iss.IssueType,
-                            iss.Project, iss.Sprint, iss.Priority, iss.Updated, iss.Description);
+                        TicketRepo.Upsert(c, info);
                     }
                 }
             }
             catch { /* kickoff proceeds with the summary the UI already has */ }
         }
 
+        // The kickoff prompt names the tracker that owns this key ("JIRA ticket …" vs "ClickUp
+        // task …"); an enum, not the fetched text, so no remote data can reach the label.
+        var trackerLabel = ticketKey is not null && TicketProviders.ProviderIdFor(ticketKey) == TicketProviderIds.ClickUp
+            ? TrackerLabel.ClickUp : TrackerLabel.Jira;
+
         // Pin an explicit session id so metrics read exactly this session's transcript.
         var sessionId = Guid.NewGuid().ToString();
         var kickoff = ticketKey is null
             ? null
-            : ClaudeCommand.BuildTicket(shell.Kind, ticketKey, ticketSummary, description, model, agentName, permissionMode, sessionId);
+            : ClaudeCommand.BuildTicket(shell.Kind, ticketKey, ticketSummary, description, model, agentName, permissionMode, sessionId, trackerLabel);
 
         // Record the ticket ↔ session link now (before the transcript exists).
         if (kickoff is not null && !string.IsNullOrWhiteSpace(launchFolder))

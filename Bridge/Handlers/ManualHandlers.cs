@@ -1,7 +1,7 @@
 using System.Text.Json;
 using AIUsage.Data;
 using AIUsage.Data.Repositories;
-using AIUsage.Jira;
+using AIUsage.Tickets;
 
 namespace AIUsage.Bridge.Handlers;
 
@@ -43,7 +43,7 @@ public static partial class ManualHandlers
                     SessionHandlers.GetString(payload, "description"),
                     SessionHandlers.GetString(payload, "toolUsed"));
             }
-            JiraSync.TryFetchInBackground(key);
+            TicketSync.TryFetchInBackground(key);
             return Task.FromResult<object?>(new { id });
         });
 

@@ -140,8 +140,18 @@ public static class Migrations
         AddColumnIfMissing(conn, "Tickets", "updated", "TEXT");
         AddColumnIfMissing(conn, "Tickets", "description", "TEXT");
 
+        // v8: which tracker last returned this ticket ("jira" | "clickup"). NULL for rows that were
+        // never fetched (or fetched before v8) — tickets.list resolves those from the key.
+        AddColumnIfMissing(conn, "Tickets", "provider", "TEXT");
+
+        // Every pre-v8 fetched row came from JIRA (ClickUp support shipped in v8), so backfill those
+        // now that the column exists. Only for DBs upgrading from an older version; a fresh DB has no
+        // rows to backfill.
+        if (oldVersion is > 0 and < 8)
+            BackfillJiraProvider(conn);
+
         Seed(conn);
-        SetVersion(conn, 7);
+        SetVersion(conn, 8);
     }
 
     /// <summary>Current stored schema version, or 0 if none recorded yet (fresh DB).</summary>
@@ -157,6 +167,13 @@ public static class Migrations
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM Sessions)";
         return Convert.ToInt64(cmd.ExecuteScalar()) > 0;
+    }
+
+    private static void BackfillJiraProvider(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Tickets SET provider = 'jira' WHERE provider IS NULL AND last_synced IS NOT NULL";
+        cmd.ExecuteNonQuery();
     }
 
     private static void SetSetting(SqliteConnection conn, string key, string value)

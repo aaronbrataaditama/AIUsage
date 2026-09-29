@@ -27,7 +27,7 @@ public sealed class TranscriptScanner
 
     private static ScanResult RunCore()
     {
-        var inferrer = new TicketKeyInferrer(SettingsStore.ProjectKeyAllowlist());
+        var inferrer = new TicketKeyInferrer(SettingsStore.EffectiveKeyAllowlist(), SettingsStore.ClickUpEnabled());
         var aggregator = new SessionAggregator(inferrer);
         var backfillFrom = SettingsStore.BackfillFrom();
         // Set once by the v6 migration: existing sessions predate ToolUsage, so do a one-time

@@ -1,3 +1,4 @@
+using AIUsage.Bridge.Handlers;
 using AIUsage.Data.Repositories;
 using AIUsage.Scanner;
 using AIUsage.Tests.Helpers;
@@ -174,5 +175,24 @@ public class SessionRepoTests
         // link cascade-deleted with s1
         Assert.Equal(0L, db.Scalar<long>(
             "SELECT COUNT(*) FROM SessionTicketLinks WHERE session_id='s1'"));
+    }
+
+    [Fact]
+    public void Purge_keeps_native_clickup_links()
+    {
+        using var db = new TestDb();
+        SessionRepo.Upsert(db.Conn, NewAgg("s1"));
+        SessionRepo.AddAutoLink(db.Conn, "s1", "CU-86b1abcde", "branch");
+        SessionRepo.AddAutoLink(db.Conn, "s1", "QS-1", "prompt_text");
+        SessionRepo.AddAutoLink(db.Conn, "s1", "SFTY-1", "branch");
+
+        SettingsHandlers.PurgeDisallowedAutoLinks(db.Conn, ["SFTY"]);
+
+        Assert.Equal(1L, db.Scalar<long>(
+            "SELECT COUNT(*) FROM SessionTicketLinks WHERE ticket_key='CU-86b1abcde'"));
+        Assert.Equal(1L, db.Scalar<long>(
+            "SELECT COUNT(*) FROM SessionTicketLinks WHERE ticket_key='SFTY-1'"));
+        Assert.Equal(0L, db.Scalar<long>(
+            "SELECT COUNT(*) FROM SessionTicketLinks WHERE ticket_key='QS-1'"));
     }
 }
