@@ -56,10 +56,28 @@ public static class LiveCodeHandlers
     /// <summary>Merge multiple providers' assigned-ticket lists for the Live Code picker: drop
     /// finished tickets first (a done ticket must never occupy a picker slot, even if it's the
     /// most recently updated one — dropping it AFTER <c>Take(count)</c> would just shrink the
-    /// list instead of surfacing the next open ticket), then rank newest-first and take the
+    /// list instead of surfacing the next open ticket), then rank by <see cref="TicketInfo.PriorityRank"/>
+    /// (lower first — JIRA tickets are all rank 0, unaffected; <see cref="ClickUpTicketProvider"/>
+    /// assigns ClickUp's fixed status tiers), recency as the tiebreak within a rank, and take the
     /// configured count. Extracted so it's unit-testable without a network call.</summary>
     internal static List<TicketInfo> MergeForPicker(IEnumerable<TicketInfo> tickets, int count) =>
-        OrderByUpdatedDesc(tickets.Where(t => !t.IsDone)).Take(count).ToList();
+        tickets.Where(t => !t.IsDone)
+            .OrderBy(t => t.PriorityRank)
+            .ThenByDescending(t => ParseUpdated(t.Updated) ?? DateTimeOffset.MinValue)
+            .Take(count)
+            .ToList();
+
+    /// <summary>The shape the main list sends to the page.</summary>
+    private static object ToPickerItem(TicketInfo t) => new
+    {
+        key = t.Key,
+        summary = t.Summary,
+        status = t.Status,
+        issueType = t.IssueType,
+        priority = t.Priority,
+        provider = t.Provider,
+        updated = t.Updated
+    };
 
     /// <summary>One <see cref="ConPtySession"/> per tab plus the metadata needed to locate its
     /// transcript and to Resume it after Stop. Mutated only under <see cref="Gate"/> because the
@@ -153,17 +171,7 @@ public static class LiveCodeHandlers
             var max = Math.Clamp(count * 3, 25, 60);
             var results = await Task.WhenAll(providers.Select(p => FetchAssignedAsync(p, max)));
 
-            var tickets = MergeForPicker(results.SelectMany(r => r.Tickets), count)
-                .Select(t => new
-                {
-                    key = t.Key,
-                    summary = t.Summary,
-                    status = t.Status,
-                    issueType = t.IssueType,
-                    priority = t.Priority,
-                    provider = t.Provider,
-                    updated = t.Updated
-                }).ToList();
+            var tickets = MergeForPicker(results.SelectMany(r => r.Tickets), count).Select(ToPickerItem).ToList();
             var errors = results
                 .Where(r => r.ErrorMessage is not null)
                 .Select(r => new { provider = r.ProviderName, message = r.ErrorMessage })

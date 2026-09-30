@@ -9,6 +9,12 @@ public sealed class ClickUpTicketProvider(ClickUpClient client) : ITicketProvide
     /// a runaway workspace shouldn't turn one bridge call into an unbounded fetch loop.</summary>
     private const int MaxPages = 3;
 
+    /// <summary>Fixed status-name priority for the Live Code picker, most workable first. A task
+    /// whose status isn't one of these is excluded from the picker entirely (not just
+    /// deprioritized) — Testing/Documentation/Done/Closed/etc. clutter the "what to start next"
+    /// list. Matched case-insensitively against ClickUp's own status name.</summary>
+    private static readonly string[] StatusPriority = ["in progress", "pr initiated", "planned", "open"];
+
     public string Id => TicketProviderIds.ClickUp;
     public string DisplayName => "ClickUp";
     public string ItemNoun => "task";
@@ -24,7 +30,20 @@ public sealed class ClickUpTicketProvider(ClickUpClient client) : ITicketProvide
             all.AddRange(tasks);
             if (isLast || all.Count >= max) break;
         }
-        // ClickUp's order_by=updated direction isn't guaranteed, so sort client-side.
-        return all.OrderByDescending(t => t.Updated, StringComparer.Ordinal).ToList();
+        return RankAndFilter(all);
     }
+
+    /// <summary>Keep only tasks whose status matches <see cref="StatusPriority"/>, tagging each
+    /// with its tier (<see cref="TicketInfo.PriorityRank"/>, 0 = highest) so the merged Live Code
+    /// picker ranks by status ahead of recency. Orders by rank, then by ClickUp's own "updated"
+    /// string as the tiebreak (plain-text comparable — see <see cref="AssignedAsync"/>'s remark on
+    /// ClickUp's order_by not being guaranteed).</summary>
+    internal static List<TicketInfo> RankAndFilter(IEnumerable<TicketInfo> tasks) =>
+        tasks
+            .Select(t => (Ticket: t, Rank: Array.IndexOf(StatusPriority, (t.Status ?? "").Trim().ToLowerInvariant())))
+            .Where(x => x.Rank >= 0)
+            .OrderBy(x => x.Rank)
+            .ThenByDescending(x => x.Ticket.Updated, StringComparer.Ordinal)
+            .Select(x => x.Ticket with { PriorityRank = x.Rank })
+            .ToList();
 }

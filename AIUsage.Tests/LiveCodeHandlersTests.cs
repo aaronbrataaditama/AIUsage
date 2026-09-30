@@ -12,8 +12,8 @@ namespace AIUsage.Tests;
 /// </summary>
 public class LiveCodeHandlersTests
 {
-    private static TicketInfo Ticket(string key, string provider, string? updated, bool isDone = false) =>
-        new(key, provider, "Summary", "Open", "Task", "PROJ", null, "Medium", updated, Description: null, IsDone: isDone);
+    private static TicketInfo Ticket(string key, string provider, string? updated, bool isDone = false, int priorityRank = 0) =>
+        new(key, provider, "Summary", "Open", "Task", "PROJ", null, "Medium", updated, Description: null, IsDone: isDone, PriorityRank: priorityRank);
 
     [Fact]
     public void ParseUpdated_handles_jiras_colonless_offset_and_clickups_utc_o_format()
@@ -67,6 +67,30 @@ public class LiveCodeHandlersTests
         Assert.Equal(2, merged.Count);
         Assert.DoesNotContain(merged, t => t.Key == "ABC-1");
         Assert.Equal(["ABC-2", "ABC-3"], merged.Select(t => t.Key).ToList());
+    }
+
+    [Fact]
+    public void MergeForPicker_ranks_lower_priority_number_first_even_if_older()
+    {
+        // ClickUp's "In Progress" (rank 0) must outrank its "Planned" (rank 2) even when the
+        // Planned ticket was updated more recently — priority beats recency.
+        var planned = Ticket("ABC-1", TicketProviderIds.ClickUp, "2024-01-15T00:00:00.0000000Z", priorityRank: 2);
+        var inProgress = Ticket("ABC-2", TicketProviderIds.ClickUp, "2024-01-10T00:00:00.0000000Z", priorityRank: 0);
+
+        var merged = LiveCodeHandlers.MergeForPicker(new[] { planned, inProgress }, count: 2);
+
+        Assert.Equal(["ABC-2", "ABC-1"], merged.Select(t => t.Key).ToList());
+    }
+
+    [Fact]
+    public void MergeForPicker_breaks_ties_within_a_rank_by_recency()
+    {
+        var older = Ticket("ABC-1", TicketProviderIds.Jira, "2024-01-10T00:00:00.000+0000");
+        var newer = Ticket("ABC-2", TicketProviderIds.Jira, "2024-01-14T00:00:00.000+0000");
+
+        var merged = LiveCodeHandlers.MergeForPicker(new[] { older, newer }, count: 2);
+
+        Assert.Equal(["ABC-2", "ABC-1"], merged.Select(t => t.Key).ToList());
     }
 
     [Fact]

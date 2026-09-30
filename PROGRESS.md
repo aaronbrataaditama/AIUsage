@@ -2,6 +2,28 @@
 
 _Last updated: 2026-09-30_
 
+## 2026-09-30: Live Code ticket picker ranks ClickUp tickets by status priority — version bumped to **1.1.3**
+
+The main ticket picker ranks every assigned ticket by most-recently-updated and truncates to
+`livecode_ticket_count` (default 3). Confirmed against a real workspace: 8 assigned ClickUp tasks
+across statuses Testing/In Progress/Planned/Documentation, none wrongly marked done — so a
+not-yet-started ("Planned") ticket wasn't being excluded by any status bug, it was simply outranked
+by more-recently-touched Testing tickets and truncated by the small default count (verified via an
+enhanced `--clickuptest <key>` that now also prints `status`/`isDone`). The actual fix needed: only
+show tickets that are realistically "next to start" — **In Progress → PR Initiated → Planned →
+Open**, in that priority — and hide every other ClickUp status outright (Testing, Documentation,
+Done, Closed, …), not just deprioritize it.
+
+Added `TicketInfo.PriorityRank` (0 = highest); JIRA tickets are all rank 0 (today's pure-recency
+behavior, completely unaffected). `ClickUpTicketProvider.RankAndFilter` (internal, unit-tested) is
+the ClickUp-specific piece: keeps only tasks whose status name matches the fixed 4-tier list
+(case-insensitive), tags each with its tier, drops everything else. `LiveCodeHandlers.MergeForPicker`
+now sorts by `PriorityRank` ascending first, recency descending only as the tiebreak within a rank —
+so a lower-priority-number ClickUp ticket always outranks a higher one even if the higher one was
+touched more recently. (An earlier iteration of this fix added a separate "Planned" section based on
+a generic not-yet-started flag — scrapped once the actual requirement turned out to be this fixed
+per-status priority + strict allowlist, not just surfacing "planned" tickets.)
+
 ## 2026-09-30: Live Code agent picker now finds agents nested in subfolders — version bumped to **1.1.2**
 
 `Terminal/AgentCatalog.List` scanned `.claude/agents` with `SearchOption.TopDirectoryOnly`, so any

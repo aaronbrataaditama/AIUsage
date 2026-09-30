@@ -228,7 +228,8 @@ internal static class Program
         }
 
         var info = provider.FetchAsync(key).GetAwaiter().GetResult();
-        Console.WriteLine($"provider={providerId} found={info is not null} summary={info?.Summary ?? "(none)"}");
+        Console.WriteLine($"provider={providerId} found={info is not null} summary={info?.Summary ?? "(none)"} " +
+                           $"status={info?.Status ?? "(none)"} isDone={info?.IsDone}");
     }
 
     /// <summary>Headless check for the Live Code usage panel: one live GET to Anthropic's oauth/usage

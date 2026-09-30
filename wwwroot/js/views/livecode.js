@@ -429,6 +429,18 @@ window.Views.livecode = (function () {
     if (btn) { btn.disabled = false; btn.textContent = '↻ Re-fetch'; }
   }
 
+  // Ticket buttons are keyed by ticket key (not array index) so the main list and the separate
+  // "Planned" section can share one click handler without their indices colliding.
+  function ticketButtonsHtml(list, sel) {
+    return list.map(tk => `
+      <button class="lc-ticket ${tk.key === sel ? 'selected' : ''}" data-key="${App.esc(tk.key)}">
+        <span class="badge">${App.esc(tk.key)}</span>
+        <span class="badge tracker">${App.esc(TRACKER_LABEL[tk.provider] || tk.provider || '')}</span>
+        <span class="lc-ticket-sum">${App.esc(tk.summary || '')}</span>
+        <span class="muted lc-ticket-status">${App.esc(tk.status || '')}</span>
+      </button>`).join('');
+  }
+
   function renderTicketList() {
     const listEl = document.getElementById('lc-ticket-list');
     const t = activeTab();
@@ -444,28 +456,21 @@ window.Views.livecode = (function () {
       ? `<div class="footnote">${G.ticketErrors.map(e => `${App.esc(e.provider)}: ${App.esc(e.message)}`).join(' · ')}</div>`
       : '';
 
-    if (!G.tickets.length) {
-      listEl.innerHTML = `<span class="muted">No tickets currently assigned to you.</span>${errNotice}`;
-      return;
-    }
     const sel = t.ticket ? t.ticket.key : null;
-    listEl.innerHTML = G.tickets.map((tk, i) => `
-      <button class="lc-ticket ${tk.key === sel ? 'selected' : ''}" data-idx="${i}">
-        <span class="badge">${App.esc(tk.key)}</span>
-        <span class="badge tracker">${App.esc(TRACKER_LABEL[tk.provider] || tk.provider || '')}</span>
-        <span class="lc-ticket-sum">${App.esc(tk.summary || '')}</span>
-        <span class="muted lc-ticket-status">${App.esc(tk.status || '')}</span>
-      </button>`).join('') + errNotice;
-    listEl.querySelectorAll('.lc-ticket').forEach(b =>
-      b.addEventListener('click', () => selectTicket(+b.dataset.idx)));
+    listEl.innerHTML = G.tickets.length
+      ? ticketButtonsHtml(G.tickets, sel) + errNotice
+      : `<span class="muted">No tickets currently assigned to you.</span>${errNotice}`;
+
+    document.querySelectorAll('.lc-ticket').forEach(b =>
+      b.addEventListener('click', () => selectTicket(b.dataset.key)));
   }
 
-  function selectTicket(idx) {
+  function selectTicket(key) {
     const t = activeTab();
     if (!t) return;
-    t.ticket = G.tickets[idx] || null;
+    t.ticket = G.tickets.find(tk => tk.key === key) || null;
     t.ticketKeyHint = '';
-    document.querySelectorAll('.lc-ticket').forEach((b, i) => b.classList.toggle('selected', i === idx));
+    document.querySelectorAll('.lc-ticket').forEach(b => b.classList.toggle('selected', b.dataset.key === key));
     updateButtons();
     renderTabBar();
   }
