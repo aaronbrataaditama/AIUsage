@@ -2,6 +2,20 @@
 
 _Last updated: 2026-09-30_
 
+## 2026-09-30: Live Code agent picker now finds agents nested in subfolders — version bumped to **1.1.2**
+
+`Terminal/AgentCatalog.List` scanned `.claude/agents` with `SearchOption.TopDirectoryOnly`, so any
+agent organised into a subfolder (a common pattern — one subfolder per feature/sub-project, each
+holding its own `developer`/`code-reviewer`/`plan-critic`/etc. agents) was invisible to the Live
+Code dropdown. Confirmed against a real project with 35 agents split across 5 subfolders: the app
+only listed the 2 user-scoped (`~/.claude/agents`) agents and none of the 35 project ones. Changed
+to `SearchOption.AllDirectories` for every source (project dir, custom dir, user dir) — a one-line
+fix, covered by a new `AgentCatalogTests` (previously untested; filesystem scanning code in this
+project generally isn't unit tested, but the regression risk here was easy to pin with a real temp
+directory). Agent names in practice are already namespaced per subfolder (e.g.
+`docassembler-developer` vs `docsontap-developer`), so the existing first-seen-wins de-dup by name
+needed no changes.
+
 ## 2026-09-30: ClickUp native keys drop the invented `CU-` prefix — version bumped to **1.1.1**
 
 The 2026-09-29 ClickUp support (below) stored/matched a native ClickUp task as `CU-<id>`, assuming

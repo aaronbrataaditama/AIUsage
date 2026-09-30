@@ -11,7 +11,8 @@ public sealed record AgentInfo(string Name, string? Description, string Scope);
 /// </summary>
 public static class AgentCatalog
 {
-    /// <param name="projectDir">Working folder; its <c>.claude/agents</c> is scanned.</param>
+    /// <param name="projectDir">Working folder; its <c>.claude/agents</c> is scanned
+    /// recursively — agents are commonly organised into per-feature subfolders.</param>
     /// <param name="customDir">Optional user-chosen agents folder (scanned directly, and its
     /// <c>.claude/agents</c> if that's what they pointed at).</param>
     public static List<AgentInfo> List(string? projectDir, string? customDir = null)
@@ -33,7 +34,7 @@ public static class AgentCatalog
         foreach (var (dir, scope) in sources)
         {
             if (!Directory.Exists(dir)) continue;
-            foreach (var file in Directory.EnumerateFiles(dir, "*.md", SearchOption.TopDirectoryOnly))
+            foreach (var file in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
             {
                 var (name, desc) = ParseFrontmatter(file);
                 name ??= Path.GetFileNameWithoutExtension(file);
