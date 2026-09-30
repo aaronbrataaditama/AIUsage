@@ -8,7 +8,8 @@ namespace AIUsage.Data;
 /// handler, the Live Code launcher and the repositories themselves. Centralised deliberately —
 /// the Live Code path used to be the only unconstrained writer of that column, and its value
 /// comes from a remote JIRA server (2026-08 audit, AIU-04).
-/// Also accepts ClickUp native task ids in their Git-integration form, "CU-" + lowercase id.
+/// Also accepts a bare ClickUp native task id (e.g. "86b1abcde") — exactly the id ClickUp itself
+/// shows (its task URL, "Copy ID"), with no invented prefix.
 /// </summary>
 public static partial class TicketKey
 {
@@ -17,29 +18,28 @@ public static partial class TicketKey
     [GeneratedRegex(@"^[A-Z][A-Z0-9]{1,9}-\d{1,6}\z")]
     private static partial Regex Pattern();
 
-    // ClickUp native task id in the form ClickUp's own Git integration writes it: "CU-" + the
-    // lowercase id (e.g. CU-86b1abcde). It must contain a letter so a JIRA project literally named
-    // CU ("CU-123456", digits only) stays a JIRA key. The id is case-sensitive in the ClickUp API.
-    [GeneratedRegex(@"^CU-(?=[0-9a-z]*[a-z])[0-9a-z]{6,12}\z")]
+    // A bare ClickUp task id (e.g. 86b1abcde). JIRA-style and ClickUp Custom Task ID keys are
+    // always "PROJECT-number", so the dash alone tells the two grammars apart — no prefix needed.
+    // Requires both a letter AND a digit so a plain lowercase word (a branch segment like
+    // "hotfix") never passes as a task id. The id is case-sensitive in the ClickUp API, so the
+    // canonical stored form keeps the lowercase body.
+    [GeneratedRegex(@"^(?=[0-9a-z]*[a-z])(?=[0-9a-z]*[0-9])[0-9a-z]{6,12}\z")]
     private static partial Regex ClickUpNativePattern();
 
-    /// <summary>SQL GLOB (case-sensitive) matching exactly the stored native-ClickUp form's prefix+letter.</summary>
-    public const string ClickUpNativeGlob = "CU-*[a-z]*";
-
-    /// <summary>True for an already-normalised key: "SFTY-1234" or "CU-86b1abcde".</summary>
+    /// <summary>True for an already-normalised key: "SFTY-1234" or "86b1abcde".</summary>
     public static bool IsValid(string? key) =>
         key is not null && (Pattern().IsMatch(key) || ClickUpNativePattern().IsMatch(key));
 
     public static bool IsClickUpNative(string? key) => key is not null && ClickUpNativePattern().IsMatch(key);
 
-    /// <summary>Trim; ClickUp native ids keep a lowercase body, everything else is uppercased.</summary>
+    /// <summary>Trim; a dash-less ClickUp native id keeps a lowercase body, everything else is uppercased.</summary>
     public static string Normalize(string? raw)
     {
         var t = (raw ?? "").Trim();
-        if (t.Length > 3 && t.StartsWith("CU-", StringComparison.OrdinalIgnoreCase))
+        if (!t.Contains('-'))
         {
-            var native = "CU-" + t[3..].ToLowerInvariant();
-            if (ClickUpNativePattern().IsMatch(native)) return native;
+            var lower = t.ToLowerInvariant();
+            if (ClickUpNativePattern().IsMatch(lower)) return lower;
         }
         return t.ToUpperInvariant();
     }
@@ -48,7 +48,6 @@ public static partial class TicketKey
     /// dash-less key (e.g. a stray NULL-provider row) rather than throwing.</summary>
     public static string? ProjectOf(string key)
     {
-        if (IsClickUpNative(key)) return null;
         var i = key.IndexOf('-');
         return i > 0 ? key[..i] : null;
     }
@@ -58,7 +57,7 @@ public static partial class TicketKey
     {
         var key = Normalize(raw);
         if (!IsValid(key))
-            throw new ArgumentException($"'{key}' is not a valid ticket key (expected e.g. SFTY-1234 or CU-86b1abcde)");
+            throw new ArgumentException($"'{key}' is not a valid ticket key (expected e.g. SFTY-1234, or a bare ClickUp task id like 86d353g15)");
         return key;
     }
 }

@@ -184,8 +184,8 @@ public static partial class SettingsHandlers
     }
 
     /// <summary>
-    /// The purge itself, against an explicit connection. Native ClickUp links (CU-&lt;id&gt;) have no
-    /// project part, so the allowlist never applies to them and they are always kept.
+    /// The purge itself, against an explicit connection. Native ClickUp links (a bare task id, no
+    /// dash) have no project part, so the allowlist never applies to them and they are always kept.
     /// </summary>
     internal static void PurgeDisallowedAutoLinks(SqliteConnection conn, HashSet<string> allowed)
     {
@@ -199,7 +199,7 @@ public static partial class SettingsHandlers
             cmd.CommandText = $"""
                 DELETE FROM SessionTicketLinks
                 WHERE source = 'auto'
-                  AND ticket_key NOT GLOB '{TicketKey.ClickUpNativeGlob}'
+                  AND instr(ticket_key, '-') > 0
                   AND substr(ticket_key, 1, instr(ticket_key, '-') - 1) NOT IN ({placeholders});
 
                 UPDATE Sessions SET review_state = 'pending'

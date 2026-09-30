@@ -81,7 +81,7 @@ public sealed class ClickUpClient
     internal static string BuildTaskPath(string key, string? teamId)
     {
         if (TicketKey.IsClickUpNative(key))
-            return $"/task/{Uri.EscapeDataString(key[3..])}?include_markdown_description=true";
+            return $"/task/{Uri.EscapeDataString(key)}?include_markdown_description=true";
         if (string.IsNullOrWhiteSpace(teamId))
             throw new InvalidOperationException(
                 $"'{key}' is a ClickUp Custom Task ID — set the ClickUp workspace in Settings first");
@@ -92,7 +92,7 @@ public sealed class ClickUpClient
     /// <paramref name="customPrefixes"/> is the configured ClickUp Custom Task ID prefix set
     /// (<c>clickup_custom_id_prefixes</c>): a syntactically valid <c>custom_id</c> (e.g. "DEV-42")
     /// is only used as the key when its project part is in that set. Otherwise it falls back to
-    /// "CU-&lt;id&gt;" — an unconfigured prefix must never be kept, or
+    /// the bare native id — an unconfigured prefix must never be kept, or
     /// <see cref="AIUsage.Tickets.TicketProviders.ProviderIdFor(string)"/> would route the key to
     /// JIRA instead of ClickUp (wrong tracker, wrong ticket data upserted over the ClickUp row).
     /// Irrelevant when <paramref name="requestedKey"/> is supplied (a fetch-by-key always keeps
@@ -104,7 +104,7 @@ public sealed class ClickUpClient
         var custom = TicketKey.Normalize(Str(t, "custom_id"));
         var customUsable = TicketKey.IsValid(custom) && !TicketKey.IsClickUpNative(custom)
             && TicketKey.ProjectOf(custom) is { } customProject && customPrefixes.Contains(customProject);
-        var key = requestedKey ?? (customUsable ? custom : TicketKey.Normalize("CU-" + id));
+        var key = requestedKey ?? (customUsable ? custom : TicketKey.Normalize(id));
 
         var statusType = t.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.Object ? Str(s, "type") : null;
         var folder = Nested(t, "folder", "name");

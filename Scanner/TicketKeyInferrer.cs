@@ -7,9 +7,9 @@ public sealed partial class TicketKeyInferrer(HashSet<string> projectKeyAllowlis
     [GeneratedRegex(@"\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b")]
     private static partial Regex KeyRegex();
 
-    // Stricter than TicketKey's validator on purpose: free text must also contain a digit, and the
-    // match may be followed by '_' or '-' (ClickUp branch names: CU-86b1abcde_title_user).
-    [GeneratedRegex(@"(?<![A-Za-z0-9])CU-(?=[0-9a-z]*[0-9])(?=[0-9a-z]*[a-z])[0-9a-z]{6,12}(?![0-9a-z])",
+    // A bare ClickUp task id (no invented prefix — see TicketKey), bounded by non-alphanumeric
+    // characters so it isn't picked out of the middle of an unrelated word or token.
+    [GeneratedRegex(@"(?<![A-Za-z0-9])(?=[0-9a-z]*[0-9])(?=[0-9a-z]*[a-z])[0-9a-z]{6,12}(?![0-9a-z])",
         RegexOptions.IgnoreCase)]
     private static partial Regex ClickUpNativeRegex();
 

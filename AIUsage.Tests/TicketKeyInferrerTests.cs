@@ -67,13 +67,13 @@ public class TicketKeyInferrerTests
     public void Extract_ignores_native_clickup_when_disabled()
     {
         var inf = new TicketKeyInferrer([]);
-        Assert.Empty(inf.Extract("CU-86b1abcde_fix-login"));
+        Assert.Empty(inf.Extract("86b1abcde_fix-login"));
     }
 
     [Theory]
-    [InlineData("CU-86b1abcde_fix-login_aaron", "CU-86b1abcde")]   // ClickUp Git-integration branch
-    [InlineData("feature/cu-86b1abcde-fix", "CU-86b1abcde")]
-    [InlineData("see CU-9hz4k2 please", "CU-9hz4k2")]
+    [InlineData("86b1abcde_fix-login_aaron", "86b1abcde")]   // ClickUp id embedded in a branch name
+    [InlineData("feature/86b1abcde-fix", "86b1abcde")]
+    [InlineData("see 9hz4k2 please", "9hz4k2")]
     public void Extract_finds_native_clickup_when_enabled(string text, string expected)
     {
         var inf = new TicketKeyInferrer([], clickUpNative: true);
@@ -81,8 +81,8 @@ public class TicketKeyInferrerTests
     }
 
     [Theory]
-    [InlineData("CU-abcdef")]    // no digit — too word-like to infer from free text
-    [InlineData("accu-86b1abcde")] // embedded in a word
+    [InlineData("abcdef")]        // no digit — too word-like to infer from free text
+    [InlineData("xx86b1abcdeyy")] // no non-alnum boundary on either side
     public void Extract_does_not_infer_wordlike_native(string text)
     {
         var inf = new TicketKeyInferrer([], clickUpNative: true);
@@ -93,6 +93,6 @@ public class TicketKeyInferrerTests
     public void Extract_native_clickup_bypasses_allowlist()
     {
         var inf = new TicketKeyInferrer(["SFTY"], clickUpNative: true);
-        Assert.Equal(["CU-86b1abcde"], inf.Extract("CU-86b1abcde and QS-1").ToList());
+        Assert.Equal(["86b1abcde"], inf.Extract("86b1abcde and QS-1").ToList());
     }
 }

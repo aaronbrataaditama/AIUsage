@@ -23,7 +23,7 @@ public class ClickUpClientTests
     public void ParseTask_maps_native_task()
     {
         var t = ClickUpClient.ParseTask(J(Task), requestedKey: null, NoPrefixes);
-        Assert.Equal("CU-86b1abcde", t.Key);
+        Assert.Equal("86b1abcde", t.Key);
         Assert.Equal("clickup", t.Provider);
         Assert.Equal("Fix login", t.Summary);
         Assert.Equal("in progress", t.Status);
@@ -45,7 +45,7 @@ public class ClickUpClientTests
         var prefixes = new HashSet<string> { "DEV" };
         Assert.Equal("DEV-42", ClickUpClient.ParseTask(J(withCustom), null, prefixes).Key);
         // A fetch by native key keeps the key it was asked for, so the linked row is the one updated.
-        Assert.Equal("CU-86b1abcde", ClickUpClient.ParseTask(J(withCustom), "CU-86b1abcde", prefixes).Key);
+        Assert.Equal("86b1abcde", ClickUpClient.ParseTask(J(withCustom), "86b1abcde", prefixes).Key);
     }
 
     [Fact]
@@ -56,8 +56,8 @@ public class ClickUpClientTests
         // route this ticket to JIRA — wrong tracker, wrong ticket description, and JIRA data
         // upserted over the ClickUp row.
         var withCustom = Task.Replace("\"custom_id\": null", "\"custom_id\": \"dev-42\"");
-        Assert.Equal("CU-86b1abcde", ClickUpClient.ParseTask(J(withCustom), null, NoPrefixes).Key);
-        Assert.Equal("CU-86b1abcde", ClickUpClient.ParseTask(J(withCustom), null, new HashSet<string> { "OPS" }).Key);
+        Assert.Equal("86b1abcde", ClickUpClient.ParseTask(J(withCustom), null, NoPrefixes).Key);
+        Assert.Equal("86b1abcde", ClickUpClient.ParseTask(J(withCustom), null, new HashSet<string> { "OPS" }).Key);
     }
 
     [Theory]
@@ -76,7 +76,7 @@ public class ClickUpClientTests
     [Fact]
     public void BuildTaskPath_native_needs_no_team() =>
         Assert.Equal("/task/86b1abcde?include_markdown_description=true",
-            ClickUpClient.BuildTaskPath("CU-86b1abcde", null));
+            ClickUpClient.BuildTaskPath("86b1abcde", null));
 
     [Fact]
     public void BuildTaskPath_custom_uses_team() =>
@@ -103,7 +103,7 @@ public class ClickUpClientTests
         var root = J($$"""{ "tasks": [{{Task}}], "last_page": false }""");
         var list = ClickUpClient.ParseTaskList(root, NoPrefixes);
         Assert.Single(list);
-        Assert.Equal("CU-86b1abcde", list[0].Key);
+        Assert.Equal("86b1abcde", list[0].Key);
         // AssignedAsync results never carry the description (not requested from the list endpoint).
         Assert.Null(list[0].Description);
     }
@@ -111,9 +111,9 @@ public class ClickUpClientTests
     [Fact]
     public void ParseTaskList_drops_task_whose_id_folds_into_an_invalid_key()
     {
-        // id "x" has no digits, so TicketKey.Normalize("CU-x") isn't a valid native id (needs 6-12
-        // chars) and isn't a valid JIRA-style key either ("CU-X" has no digits after the dash) —
-        // this must never be persisted or returned, per the controller's ruling.
+        // id "x" is far too short (needs 6-12 chars) to be a valid native id, and it's dash-less
+        // so it can't fold into a JIRA-style key either — this must never be persisted or
+        // returned, per the controller's ruling.
         var root = J("""{ "tasks": [{ "id": "x", "name": "bad id" }] }""");
         Assert.Empty(ClickUpClient.ParseTaskList(root, NoPrefixes));
     }

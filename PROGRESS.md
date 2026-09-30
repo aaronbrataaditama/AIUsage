@@ -1,6 +1,24 @@
 # PROGRESS — AI Usage Tracker
 
-_Last updated: 2026-09-29_
+_Last updated: 2026-09-30_
+
+## 2026-09-30: ClickUp native keys drop the invented `CU-` prefix — version bumped to **1.1.1**
+
+The 2026-09-29 ClickUp support (below) stored/matched a native ClickUp task as `CU-<id>`, assuming
+that's the form ClickUp's own Git integration writes into branch names. In practice ClickUp never
+shows that prefix anywhere (its task URL, "Copy ID", branch names are all just the bare id, e.g.
+`86d353g15`), so auto-linking essentially never fired for ClickUp sessions. `Data/TicketKey` now
+treats a bare dash-less alphanumeric id (containing both a letter and a digit, 6–12 chars) as the
+ClickUp-native shape — no prefix. Dash presence alone now separates the two grammars (JIRA/Custom
+Task ID keys always have one; a raw ClickUp id never does), so this needed no schema change and no
+separate provider column. The native pattern is also tightened vs the old one: it now requires a
+digit as well as a letter (the `CU-` marker used to make that unnecessary — without it, a plain
+lowercase word like `hotfix` would otherwise pass as a task id). `ClickUpClient` no longer strips/adds
+the `CU-` substring when building API paths or falling back to the native id, and the
+`PurgeDisallowedAutoLinks` SQL exemption for native links is now a plain `instr(ticket_key,'-') > 0`
+dash check instead of a GLOB on the old prefix. Checked the local DB first — the only `CU-…` row
+present was a genuine JIRA project literally named `CU` (`CU-123456`), not a leftover native link, so
+no data migration was needed.
 
 ## 2026-09-29: ClickUp ticket-tracker support + all-subscription usage panel — version bumped to **1.1.0**
 

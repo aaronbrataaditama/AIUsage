@@ -8,7 +8,7 @@ public class TicketProvidersTests
     private static readonly HashSet<string> Prefixes = ["DEV", "OPS"];
 
     [Theory]
-    [InlineData("CU-86b1abcde", "clickup")]
+    [InlineData("86b1abcde", "clickup")]
     [InlineData("DEV-42", "clickup")]
     [InlineData("SFTY-1", "jira")]
     public void ProviderIdFor_routes_by_form_and_prefix(string key, string expected) =>

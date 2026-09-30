@@ -44,23 +44,25 @@ public class TicketKeyTests
     }
 
     [Theory]
-    [InlineData("CU-86b1abcde")]
-    [InlineData("CU-abc123")]
-    [InlineData("CU-9hz4k2")]
+    [InlineData("86b1abcde")]
+    [InlineData("abc123")]
+    [InlineData("9hz4k2")]
     public void IsValid_accepts_clickup_native_keys(string key) => Assert.True(TicketKey.IsValid(key));
 
     [Theory]
-    [InlineData("CU-86B1ABCDE")]        // not normalised — native ids are stored lowercase
-    [InlineData("CU-abc")]              // too short (< 6)
-    [InlineData("CU-abcdefghijklm")]    // too long (> 12)
-    [InlineData("CU-86b1'abc")]
-    [InlineData("CU-86b1 abc")]
-    [InlineData("CU-86b1abcde\n")]
+    [InlineData("86B1ABCDE")]           // not normalised — native ids are stored lowercase
+    [InlineData("abc12")]               // too short (< 6)
+    [InlineData("abc123abc123x")]       // too long (> 12)
+    [InlineData("86b1'abc")]
+    [InlineData("86b1 abc")]
+    [InlineData("86b1abcde\n")]
+    [InlineData("hotfix")]              // letters only — a plain word, not a task id
+    [InlineData("123456")]              // digits only
     public void IsValid_rejects_malformed_clickup_keys(string key) => Assert.False(TicketKey.IsValid(key));
 
     [Theory]
-    [InlineData("  cu-86B1ABCDE ", "CU-86b1abcde")]
-    [InlineData("CU-86b1abcde", "CU-86b1abcde")]
+    [InlineData("  86B1ABCDE ", "86b1abcde")]
+    [InlineData("86b1abcde", "86b1abcde")]
     [InlineData("sfty-12", "SFTY-12")]
     public void Normalize_folds_each_form_correctly(string raw, string expected) =>
         Assert.Equal(expected, TicketKey.Normalize(raw));
@@ -79,7 +81,7 @@ public class TicketKeyTests
     [Fact]
     public void ProjectOf_is_null_for_native_and_prefix_for_jira_style()
     {
-        Assert.Null(TicketKey.ProjectOf("CU-86b1abcde"));
+        Assert.Null(TicketKey.ProjectOf("86b1abcde"));
         Assert.Equal("DEV", TicketKey.ProjectOf("DEV-123"));
     }
 
@@ -93,6 +95,6 @@ public class TicketKeyTests
     public void Require_message_mentions_both_forms()
     {
         var ex = Assert.Throws<ArgumentException>(() => TicketKey.Require("nope"));
-        Assert.Contains("CU-", ex.Message);
+        Assert.Contains("ClickUp", ex.Message);
     }
 }

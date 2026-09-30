@@ -16,8 +16,8 @@ SQLite file.
 
 - **Scans Claude Code transcripts** (`%USERPROFILE%\.claude\projects\**\*.jsonl`) incrementally and
   infers the ticket each session worked on (from the git branch → working directory → prompt
-  text, filtered by a project-key allowlist; ClickUp's native `CU-<id>` form is recognized too, when
-  ClickUp is enabled).
+  text, filtered by a project-key allowlist; a bare ClickUp task id — no prefix, exactly as ClickUp
+  itself shows it — is recognized too, when ClickUp is enabled).
 - **Dashboard** — token usage per week, AI-assisted tickets per week, a breakdown of *what* the AI
   did (edit/write/read/shell/other), Claude model usage over time, top tickets, and ticket-type ×
   activity — plus **Automation & extensions** charts (sub-agents, skills, MCP servers, and hooks
@@ -33,7 +33,7 @@ SQLite file.
 - **Export to Excel** — one-click `.xlsx` export of Sessions, Manual entries, and Tickets.
 - **Read-only JIRA and/or ClickUp integration** — enrich ticket keys with summary/status/type/etc.
   The app never writes to either tracker. Both are optional and independently toggled; a ClickUp
-  key (native `CU-<id>`, or a configured Custom Task ID prefix) and a JIRA key can coexist.
+  key (a bare native task id, or a configured Custom Task ID prefix) and a JIRA key can coexist.
 - **Live Code** — drive interactive Claude Code sessions right inside the app, kicked off from a
   selected ticket (see below).
 

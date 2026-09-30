@@ -230,9 +230,9 @@ public class ClaudeCommandTests
     [Fact]
     public void BuildTicket_labels_clickup_tasks()
     {
-        var cmd = ClaudeCommand.BuildTicket("powershell", "CU-86b1abcde", "Fix login", "desc", null, null, null,
+        var cmd = ClaudeCommand.BuildTicket("powershell", "86b1abcde", "Fix login", "desc", null, null, null,
             "00000000-0000-0000-0000-000000000000", TrackerLabel.ClickUp);
-        Assert.Contains("ClickUp task CU-86b1abcde: Fix login", cmd);
+        Assert.Contains("ClickUp task 86b1abcde: Fix login", cmd);
         Assert.Contains("UNTRUSTED DATA from ClickUp", cmd);
         Assert.DoesNotContain("JIRA", cmd);
     }

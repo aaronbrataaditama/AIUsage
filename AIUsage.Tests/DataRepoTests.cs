@@ -12,15 +12,15 @@ public class DataRepoTests
     public void Upsert_stores_provider_and_keeps_description_on_search_upsert()
     {
         using var db = new TestDb();
-        TicketRepo.Upsert(db.Conn, new TicketInfo("CU-86b1abcde", TicketProviderIds.ClickUp, "Fix login",
+        TicketRepo.Upsert(db.Conn, new TicketInfo("86b1abcde", TicketProviderIds.ClickUp, "Fix login",
             "in progress", "Task", "Web", null, "high", "2026-09-01T00:00:00Z", Description: "full text"));
-        TicketRepo.Upsert(db.Conn, new TicketInfo("CU-86b1abcde", TicketProviderIds.ClickUp, "Fix login v2",
+        TicketRepo.Upsert(db.Conn, new TicketInfo("86b1abcde", TicketProviderIds.ClickUp, "Fix login v2",
             "review", "Task", "Web", null, "high", "2026-09-02T00:00:00Z"));   // search result: no description
 
-        var row = TicketRepo.List(db.Conn).Single(r => (string)r["key"]! == "CU-86b1abcde");
+        var row = TicketRepo.List(db.Conn).Single(r => (string)r["key"]! == "86b1abcde");
         Assert.Equal("clickup", row["provider"]);
         Assert.Equal("Fix login v2", row["summary"]);
-        Assert.Equal("full text", db.Scalar<string>("SELECT description FROM Tickets WHERE key='CU-86b1abcde'"));
+        Assert.Equal("full text", db.Scalar<string>("SELECT description FROM Tickets WHERE key='86b1abcde'"));
     }
 
     [Fact]
